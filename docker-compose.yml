@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: kb_trends_pg
+    environment:
+      POSTGRES_USER: kb
+      POSTGRES_PASSWORD: kbpass
+      POSTGRES_DB: kbtrends
+    ports:
+      - "5434:5432"
+    volumes:
+      - kb_trends_pgdata:/var/lib/postgresql/data
+
+volumes:
+  kb_trends_pgdata:

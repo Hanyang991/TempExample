@@ -1,0 +1,138 @@
+# geos:
+#   - US
+#   - CA
+#   - GB
+#   - AU
+#   - DE
+#   - FR
+#   - SG
+#   - ID
+#   - JP
+#   - KR
+
+geos:
+  - US
+  - GB
+  - SG
+
+
+timeframe: "today 3-m"
+
+seed_groups:
+
+  # 1️⃣ 피부 고민 (상태 / 원인 / 증상 분리)
+  skincare_needs:
+    - "sensitive skin"
+    - "skin barrier"
+    - "damaged skin barrier"
+    - "redness"
+    - "rosacea"
+    - "hyperpigmentation"
+    - "dark spots"
+    - "melasma"
+    - "acne"
+    - "hormonal acne"
+    - "fungal acne"
+    - "dry skin"
+    - "dehydrated skin"
+    - "oily skin"
+    - "combination skin"
+    - "eczema prone skin"
+
+  # 2️⃣ 기능 중심 니즈 (효과/목적)
+  skin_goals:
+    - "skin repair"
+    - "barrier repair"
+    - "brightening serum"
+    - "calming skincare"
+    - "acne soothing"
+    - "post acne care"
+    - "glass skin"
+    - "glow skin"
+    - "pore tightening"
+    - "oil control"
+    - "hydrating toner"
+    - "anti aging"
+    - "wrinkle care"
+
+  # 3️⃣ 성분 (단일 + 조합)
+  ingredients:
+    - "ceramide"
+    - "panthenol"
+    - "azelaic acid"
+    - "tranexamic acid"
+    - "pdrn"
+    - "niacinamide"
+    - "cica"
+    - "centella asiatica"
+    - "heartleaf"
+    - "hyaluronic acid"
+    - "beta glucan"
+    - "retinol"
+    - "bakuchiol"
+    - "vitamin c"
+    - "peptide"
+    - "snail mucin"
+    - "fermented skincare"
+
+  # 4️⃣ 제형 / 포맷 (차별화 포인트)
+  formats:
+    - "jelly cleanser"
+    - "balm stick"
+    - "serum mist"
+    - "cushion foundation"
+    - "ampoule"
+    - "essence"
+    - "cream toner"
+    - "pad toner"
+    - "sleeping mask"
+    - "sheet mask"
+    - "sun stick"
+    - "tone up sunscreen"
+
+  # 5️⃣ 사용 상황 / 라이프스타일
+  usage_context:
+    - "morning skincare routine"
+    - "night skincare routine"
+    - "post acne routine"
+    - "after sun care"
+    - "skin cycling"
+    - "dermatologist recommended"
+    - "pregnancy safe skincare"
+    - "teen skincare"
+    - "men skincare routine"
+
+  # 6️⃣ K-beauty 의도 (탐색 → 구매 직전)
+  kbeauty_intent:
+    - "k beauty"
+    - "korean skincare"
+    - "korean sunscreen"
+    - "korean toner"
+    - "korean serum"
+    - "korean cushion"
+    - "k beauty routine"
+    - "k beauty vs western skincare"
+    - "best korean skincare"
+    - "viral korean skincare"
+
+  # 7️⃣ SNS / 콘텐츠 기반 키워드
+  content_platform:
+    - "tiktok skincare"
+    - "tiktok made me buy it"
+    - "amazon viral skincare"
+    - "dermatologist tiktok"
+    - "skincare before after"
+    - "skincare routine tiktok"
+    - "skincare review"
+    - "skincare recommendation"
+
+  # 8️⃣ 구매 의도 (커머스 연결용)
+  purchase_intent:
+    - "best for sensitive skin"
+    - "dermatologist approved"
+    - "fragrance free skincare"
+    - "non comedogenic"
+    - "cruelty free skincare"
+    - "vegan skincare"
+    - "affordable skincare"
+    - "luxury skincare"
