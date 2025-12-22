@@ -1,138 +1,256 @@
-# geos:
-#   - US
-#   - CA
-#   - GB
-#   - AU
-#   - DE
-#   - FR
-#   - SG
-#   - ID
-#   - JP
-#   - KR
-
 geos:
-  - US
-  - GB
-  - SG
-
-
-timeframe: "today 3-m"
-
+- US
+- GB
+- SG
+timeframe: today 3-m
 seed_groups:
-
-  # 1️⃣ 피부 고민 (상태 / 원인 / 증상 분리)
   skincare_needs:
-    - "sensitive skin"
-    - "skin barrier"
-    - "damaged skin barrier"
-    - "redness"
-    - "rosacea"
-    - "hyperpigmentation"
-    - "dark spots"
-    - "melasma"
-    - "acne"
-    - "hormonal acne"
-    - "fungal acne"
-    - "dry skin"
-    - "dehydrated skin"
-    - "oily skin"
-    - "combination skin"
-    - "eczema prone skin"
-
-  # 2️⃣ 기능 중심 니즈 (효과/목적)
+  - sensitive skin
+  - skin barrier
+  - damaged skin barrier
+  - redness
+  - rosacea
+  - hyperpigmentation
+  - dark spots
+  - melasma
+  - acne
+  - hormonal acne
+  - fungal acne
+  - dry skin
+  - dehydrated skin
+  - oily skin
+  - combination skin
+  - eczema prone skin
   skin_goals:
-    - "skin repair"
-    - "barrier repair"
-    - "brightening serum"
-    - "calming skincare"
-    - "acne soothing"
-    - "post acne care"
-    - "glass skin"
-    - "glow skin"
-    - "pore tightening"
-    - "oil control"
-    - "hydrating toner"
-    - "anti aging"
-    - "wrinkle care"
-
-  # 3️⃣ 성분 (단일 + 조합)
+  - skin repair
+  - barrier repair
+  - brightening serum
+  - calming skincare
+  - acne soothing
+  - post acne care
+  - glass skin
+  - glow skin
+  - pore tightening
+  - oil control
+  - hydrating toner
+  - anti aging
+  - wrinkle care
   ingredients:
-    - "ceramide"
-    - "panthenol"
-    - "azelaic acid"
-    - "tranexamic acid"
-    - "pdrn"
-    - "niacinamide"
-    - "cica"
-    - "centella asiatica"
-    - "heartleaf"
-    - "hyaluronic acid"
-    - "beta glucan"
-    - "retinol"
-    - "bakuchiol"
-    - "vitamin c"
-    - "peptide"
-    - "snail mucin"
-    - "fermented skincare"
-
-  # 4️⃣ 제형 / 포맷 (차별화 포인트)
+  - ceramide
+  - panthenol
+  - azelaic acid
+  - tranexamic acid
+  - pdrn
+  - niacinamide
+  - cica
+  - centella asiatica
+  - heartleaf
+  - hyaluronic acid
+  - beta glucan
+  - retinol
+  - bakuchiol
+  - vitamin c
+  - peptide
+  - snail mucin
+  - fermented skincare
   formats:
-    - "jelly cleanser"
-    - "balm stick"
-    - "serum mist"
-    - "cushion foundation"
-    - "ampoule"
-    - "essence"
-    - "cream toner"
-    - "pad toner"
-    - "sleeping mask"
-    - "sheet mask"
-    - "sun stick"
-    - "tone up sunscreen"
-
-  # 5️⃣ 사용 상황 / 라이프스타일
+  - jelly cleanser
+  - balm stick
+  - serum mist
+  - cushion foundation
+  - ampoule
+  - essence
+  - cream toner
+  - pad toner
+  - sleeping mask
+  - sheet mask
+  - sun stick
+  - tone up sunscreen
   usage_context:
-    - "morning skincare routine"
-    - "night skincare routine"
-    - "post acne routine"
-    - "after sun care"
-    - "skin cycling"
-    - "dermatologist recommended"
-    - "pregnancy safe skincare"
-    - "teen skincare"
-    - "men skincare routine"
-
-  # 6️⃣ K-beauty 의도 (탐색 → 구매 직전)
+  - morning skincare routine
+  - night skincare routine
+  - post acne routine
+  - after sun care
+  - skin cycling
+  - dermatologist recommended
+  - pregnancy safe skincare
+  - teen skincare
+  - men skincare routine
   kbeauty_intent:
-    - "k beauty"
-    - "korean skincare"
-    - "korean sunscreen"
-    - "korean toner"
-    - "korean serum"
-    - "korean cushion"
-    - "k beauty routine"
-    - "k beauty vs western skincare"
-    - "best korean skincare"
-    - "viral korean skincare"
-
-  # 7️⃣ SNS / 콘텐츠 기반 키워드
+  - k beauty
+  - korean skincare
+  - korean sunscreen
+  - korean toner
+  - korean serum
+  - korean cushion
+  - k beauty routine
+  - k beauty vs western skincare
+  - best korean skincare
+  - viral korean skincare
   content_platform:
-    - "tiktok skincare"
-    - "tiktok made me buy it"
-    - "amazon viral skincare"
-    - "dermatologist tiktok"
-    - "skincare before after"
-    - "skincare routine tiktok"
-    - "skincare review"
-    - "skincare recommendation"
-
-  # 8️⃣ 구매 의도 (커머스 연결용)
+  - tiktok skincare
+  - tiktok made me buy it
+  - amazon viral skincare
+  - dermatologist tiktok
+  - skincare before after
+  - skincare routine tiktok
+  - skincare review
+  - skincare recommendation
   purchase_intent:
-    - "best for sensitive skin"
-    - "dermatologist approved"
-    - "fragrance free skincare"
-    - "non comedogenic"
-    - "cruelty free skincare"
-    - "vegan skincare"
-    - "affordable skincare"
-    - "luxury skincare"
+  - best for sensitive skin
+  - dermatologist approved
+  - fragrance free skincare
+  - non comedogenic
+  - cruelty free skincare
+  - vegan skincare
+  - affordable skincare
+  - luxury skincare
+  discovered_auto:
+  - best hand creams for dry skin
+  - perioral dermatitis
+  - acne studios hoodie
+  - best face masks for acne
+  - isoi brightening serum
+  - best acne treatments
+  - best skincare for oily skin
+  - hormonal acne treatment
+  - fungal acne safe
+  - hyperpigmentation treatment
+  - dark spots on face
+  - acne studios
+  - ceramide cream
+  - dior skin glow
+  - face redness
+  - moisturizer
+  - acne cream
+  - anti aging cream
+  - melasma treatment
+  - pore tightening serum
+  - skin barrier cream
+  - what is combination skin
+  - rosacea skin
+  - skin barrier repair
+  - rosacea treatment
+  - acne treatment
+  - what is acne
+  - eye redness
+  - moisturizer for sensitive skin
+  - moisturizer for oily skin
+  - dark spots on skin
+  - acne scars
+  - melasma cream
+  - melasma on face
+  - moisturizer for dry skin
+  - anti aging serum
+  - what is hyperpigmentation
+  - cleanser for oily skin
+  - ceramide moisturizer
+  - how to get glass skin
+  - skincare for combination skin
+  - what is rosacea
+  - fungal acne cream
+  - foundation for oily skin
+  - redness on face
+  - oily skin face wash
+  - dry skin on face
+  - dry itchy skin
+  - what is fungal acne
+  - skin barrier repair cream
+  - how to repair skin barrier
+  - back acne
+  - fungal acne on face
+  - fungal acne treatment
+  - hyperpigmentation on face
+  - illiyoon ceramide cream
+  - rimmel skin tint
+  - how to achieve glass skin
+  - is clinical brightening serum
+  - where does hormonal acne appear
+  - rhode glazing milk ceramide facial essence
+  - acanthosis nigricans
+  - stella anti aging cream
+  - anti aging pill for dogs
+  - what does combination skin mean
+  - best facewash for combination skin
+  - cocokind ceramide barrier serum
+  - haruharu wonder black rice 5 ceramide barrier moisturizing cream
+  - what is a magnifying glass used for
+  - aestura atobarrier 365 cream
+  - purina pro plan sensitive skin and stomach
+  - throne of glass series order
+  - how to treat dry skin on face
+  - how to tell if acne is hormonal or bacterial
+  - chemical peel for dark spots
+  - red light therapy for rosacea
+  - acne studio scarf
+  - acne studios scarf
+  - acne scarf
+  - is rosacea itchy
+  - best moisturizer for dry skin
+  - anti aging red light mask
+  - niacinamide for hyperpigmentation
+  - azelaic acid for hyperpigmentation
+  - illiyoon ceramide ato concentrate cream
+  - cosrx skin barrier moisturizer
+  - dry face skin
+  - combination skin moisturizer
+  - rosacea face
+  - skin tint
+  - what is glass skin
+  - oil control valve
+  - skin redness
+  - sensitive skin moisturizer
+  - skin dark spots
+  - glow serum
+  - skin repair cream
+  - milky toner
+  - skin hyperpigmentation
+  - vitamin c serum
+  - oily skin moisturizer
+  - skin brightening serum
+  - damaged skin barrier signs
+  - what is hormonal acne
+  - what is skin barrier
+  - cerave
+  - combination skin cleanser
+  - oily skin cleanser
+  - non comedogenic moisturizer for oily skin
+  - combination skin products
+  - melasma skin
+  - barrier cream
+  - barrier repair cream
+  - moisturizer for combination skin
+  - glow skin care
+  - cleanser for sensitive skin
+  - rosacea cream
+  - skin care
+  - azelaic acid for melasma
+  - cleanser for combination skin
+  - what is melasma
+  - signs of damaged skin barrier
+  - how to repair damaged skin barrier
+  - glow recipe
+  - cream for dry skin
+  - glass skin mask
+  - dry skin moisturizer
+  - best hydrating toner
+  - skincare for oily skin
+  - how to fix damaged skin barrier
+  - hyperpigmentation cream
+  - best brightening serum
+  - glass skin products
+  - oil control moisturizer
+  - spironolactone
+  - cream for melasma
+  - moisturiser for combination skin
+  - ceramide serum
+  - cystic acne
+  - hyperpigmentation serum
+  - glass skin serum
+  - rosacea acne
+  - dior foundation
+  - ceramide for skin
+  - lotion for dry skin
+  - hyperpigmentation meme
+  - get rid of dark spots
+  - face wash for oily skin
