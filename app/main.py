@@ -17,6 +17,7 @@ from app.storage_pg import (
 )
 from datetime import datetime, timezone, timedelta
 from tqdm import tqdm
+from app.storage_pg import get_approved_terms
 
 import warnings
 warnings.filterwarnings(
@@ -52,6 +53,9 @@ def run():
     terms: list[str] = []
     for _, arr in cfg["seed_groups"].items():
         terms.extend(arr)
+
+    # ✅ 승인된 후보도 합치기 (중복 제거)
+    terms = list(dict.fromkeys(terms + get_approved_terms(limit=500)))
 
     provider = get_provider()
 

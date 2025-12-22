@@ -49,6 +49,29 @@ def init_schema():
 
     CREATE INDEX IF NOT EXISTS idx_features_term_geo_date
       ON trend_features(term, geo, as_of_date DESC);
+
+    CREATE TABLE IF NOT EXISTS discovered_terms (
+      term TEXT NOT NULL,
+      geo  TEXT NOT NULL,
+      source_term TEXT,
+      kind TEXT NOT NULL DEFAULT 'related_queries',  -- related_queries / related_topics
+      rank INT,
+      score DOUBLE PRECISION,
+      first_seen TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      last_seen  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      status TEXT NOT NULL DEFAULT 'new',            -- new / approved / rejected
+      PRIMARY KEY (term, geo)
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_discovered_status
+      ON discovered_terms(status);
+
+    CREATE INDEX IF NOT EXISTS idx_discovered_geo
+      ON discovered_terms(geo);
+
+    CREATE INDEX IF NOT EXISTS idx_discovered_last_seen
+      ON discovered_terms(last_seen DESC);
+    
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))

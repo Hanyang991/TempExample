@@ -304,3 +304,51 @@ def compute_daily_rollup(report_date: str, tz_offset: str = "+09:00",
         "top": items,
         "min_support": min_support,
     }
+
+def upsert_discovered_terms(rows: List[Dict[str, Any]]):
+    """
+    rows: [{term, geo, source_term, kind, rank, score, status}, ...]
+    """
+    if not rows:
+        return
+
+    q = text("""
+      INSERT INTO discovered_terms(term, geo, source_term, kind, rank, score, status)
+      VALUES (:term, :geo, :source_term, :kind, :rank, :score, :status)
+      ON CONFLICT (term, geo) DO UPDATE SET
+        source_term=EXCLUDED.source_term,
+        kind=EXCLUDED.kind,
+        rank=EXCLUDED.rank,
+        score=EXCLUDED.score,
+        status=discovered_terms.status,  -- ✅ 기존 승인/거절 상태 유지
+        last_seen=NOW();
+    """)
+    with engine.begin() as conn:
+        conn.execute(q, rows)
+
+def get_approved_terms(geo: Optional[str] = None, limit: int = 500) -> List[str]:
+    """
+    status='approved'인 term 목록 반환 (geo 옵션)
+    """
+    if geo:
+        q = text("""
+          SELECT term
+          FROM discovered_terms
+          WHERE status='approved' AND geo=:geo
+          ORDER BY last_seen DESC
+          LIMIT :limit;
+        """)
+        params = {"geo": geo, "limit": limit}
+    else:
+        q = text("""
+          SELECT term
+          FROM discovered_terms
+          WHERE status='approved'
+          ORDER BY last_seen DESC
+          LIMIT :limit;
+        """)
+        params = {"limit": limit}
+
+    with engine.begin() as conn:
+        rows = conn.execute(q, params).fetchall()
+    return [r[0] for r in rows]
