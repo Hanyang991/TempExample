@@ -72,6 +72,9 @@ def init_schema():
     CREATE INDEX IF NOT EXISTS idx_discovered_last_seen
       ON discovered_terms(last_seen DESC);
     
+    ALTER TABLE discovered_terms
+      ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+
     """
     with engine.begin() as conn:
         conn.execute(text(ddl))

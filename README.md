@@ -49,3 +49,26 @@ daily 실행:
 bash
 코드 복사
 python -m app.main daily
+
+python -m venv .venv
+docker-compose up -d
+
+1) seed 업데이트
+python3 -m app.discover --seed-limit 30 --max-per-term 10
+
+2) 
+미리보기
+python3 -m app.promote_seeds --limit 20 --group discovered_auto
+적용
+python3 -m app.promote_seeds --limit 20 --group discovered_auto --apply --approve
+python3 -m app.promote_seeds --limit 20 --group discovered_auto --approve
+
+3) 
+python3 -m app.backfill --months 3 --out backfill_events_last3m.csv
+
+강등
+python3 -m app.demote_seeds --group discovered_auto \
+  --use-trend-features --window-days 14 --grace-days 7
+python3 -m app.demote_seeds --group discovered_auto \
+  --use-trend-features --window-days 14 --grace-days 7 \
+  --apply --reject

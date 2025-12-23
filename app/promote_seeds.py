@@ -37,6 +37,7 @@ def existing_seed_terms(cfg: Dict[str, Any]) -> Tuple[List[str], set]:
     return all_terms, norm_set
 
 
+
 def fetch_top_new(limit: int = 20) -> List[str]:
     q = text("""
       SELECT
@@ -62,12 +63,14 @@ def mark_approved(terms: List[str]) -> int:
         return 0
     q = text("""
       UPDATE discovered_terms
-      SET status='approved'
+      SET status='approved',
+          approved_at = COALESCE(approved_at, NOW())
       WHERE status='new' AND term = ANY(:terms);
     """)
     with engine.begin() as conn:
         res = conn.execute(q, {"terms": terms})
     return res.rowcount or 0
+
 
 
 def main():
