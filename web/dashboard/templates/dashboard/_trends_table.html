@@ -1,0 +1,62 @@
+<style>
+  th { cursor: pointer; }
+</style>
+
+<table>
+  <thead>
+    <tr>
+      <th
+        hx-get="?days={{days}}&geo={{geo}}&severity={{severity}}&q={{q|urlencode}}&sort=date&dir={% if sort=='date' and dir=='desc' %}asc{% else %}desc{% endif %}"
+        hx-target="#trends-table"
+        hx-swap="innerHTML"
+        hx-push-url="true"
+      >
+        date{% if sort=='date' %}{% if dir=='asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+      </th>
+
+      <th>geo</th>
+
+      <th
+        hx-get="?days={{days}}&geo={{geo}}&severity={{severity}}&q={{q|urlencode}}&sort=term&dir={% if sort=='term' and dir=='desc' %}asc{% else %}desc{% endif %}"
+        hx-target="#trends-table"
+        hx-swap="innerHTML"
+        hx-push-url="true"
+      >
+        term{% if sort=='term' %}{% if dir=='asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+      </th>
+
+      <th
+        hx-get="?days={{days}}&geo={{geo}}&severity={{severity}}&q={{q|urlencode}}&sort=z&dir={% if sort=='z' and dir=='desc' %}asc{% else %}desc{% endif %}"
+        hx-target="#trends-table"
+        hx-swap="innerHTML"
+        hx-push-url="true"
+      >
+        z{% if sort=='z' %}{% if dir=='asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+      </th>
+
+      <th
+        hx-get="?days={{days}}&geo={{geo}}&severity={{severity}}&q={{q|urlencode}}&sort=wow&dir={% if sort=='wow' and dir=='desc' %}asc{% else %}desc{% endif %}"
+        hx-target="#trends-table"
+        hx-swap="innerHTML"
+        hx-push-url="true"
+      >
+        wow{% if sort=='wow' %}{% if dir=='asc' %} ▲{% else %} ▼{% endif %}{% endif %}
+      </th>
+
+      <th>severity</th>
+    </tr>
+  </thead>
+
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.as_of_date }}</td>
+      <td>{{ r.geo }}</td>
+      <td><a href="/term/{{ r.term|urlencode }}/">{{ r.term }}</a></td>
+      <td>{{ r.z_score|floatformat:2 }}</td>
+      <td>{{ r.wow_change|floatformat:2 }}</td>
+      <td><span class="pill">{{ r.severity }}</span></td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>

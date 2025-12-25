@@ -10,26 +10,6 @@ from sqlalchemy import text
 from app.db import engine, init_schema
 
 
-# --- 기본(문자열) 필터: 필요하면 유지/수정해서 사용 ---
-DEFAULT_EXCLUDE = [
-    # 로그에서 실제로 섞였던 오염/잡음 계열
-    "studios", "hoodie", "scarf",
-    "valve",
-    "dog", "cat", "purina",
-    "series", "order", "book", "novel", "throne of glass",
-    "magnifying glass", "used for",
-]
-
-DEFAULT_INCLUDE = [
-    # “뷰티 문맥” 최소 토큰 (없으면 강등 후보로 보기)
-    "skin", "skincare", "serum", "toner", "mist", "cream", "moisturizer", "lotion",
-    "cleanser", "face wash", "sunscreen", "spf", "mask", "foundation", "tint", "cushion",
-    "acne", "hyperpigmentation", "melasma", "rosacea", "redness", "barrier",
-    "ceramide", "panthenol", "azelaic", "tranexamic", "niacinamide", "vitamin c",
-    "retinol", "peptide", "cica", "centella", "heartleaf", "pdrn", "pore",
-]
-
-
 def load_yaml(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f) or {}
@@ -44,64 +24,23 @@ def norm(s: str) -> str:
     return " ".join(str(s).strip().lower().split())
 
 
-def parse_csv_arg(v: str, default: List[str]) -> List[str]:
-    v = (v or "").strip()
-    if not v:
-        return default
-    return [x.strip() for x in v.split(",") if x.strip()]
-
-
-def pick_demote_terms_by_text_filters(
-    terms: List[str],
-    exclude: List[str],
-    include: List[str],
-) -> Tuple[List[str], List[Tuple[str, str]]]:
-    """
-    discovered_auto 목록에서 강등할 term 후보를 뽑는다.
-    규칙:
-      - exclude 토큰이 포함되면 강등
-      - include 토큰이 하나도 없으면 강등(옵션으로 끌 수 있음)
-    """
-    demote: List[str] = []
-    reasons: List[Tuple[str, str]] = []
-
-    ex = [norm(x) for x in exclude]
-    inc = [norm(x) for x in include]
-
-    for t in terms:
-        nt = norm(t)
-
-        bad = next((x for x in ex if x in nt), None)
-        if bad:
-            demote.append(str(t))
-            reasons.append((str(t), f"exclude match: {bad}"))
-            continue
-
-        if inc:
-            ok = any(x in nt for x in inc)
-            if not ok:
-                demote.append(str(t))
-                reasons.append((str(t), "no include token"))
-                continue
-
-    # 중복 제거(원본 순서 유지)
-    seen: Set[str] = set()
-    uniq: List[str] = []
-    for t in demote:
-        k = norm(t)
-        if k in seen:
-            continue
-        seen.add(k)
-        uniq.append(t)
-
-    return uniq, reasons
+# ------------------------------
+# DB helpers
+# ------------------------------
+def trend_features_count(window_days: int) -> int:
+    q = text("""
+      SELECT COUNT(*)
+      FROM trend_features
+      WHERE as_of_date >= (CURRENT_DATE - (:days || ' days')::interval)
+    """)
+    with engine.begin() as conn:
+        return int(conn.execute(q, {"days": int(window_days)}).scalar() or 0)
 
 
 def get_active_terms_from_trend_features(window_days: int) -> Set[str]:
     """
     최근 N일 동안 trend_features에 WATCH+로 기록된 term 목록.
-    main.py가 compute_signal()이 None이 아닐 때만 trend_features에 저장하므로,
-    trend_features에 한 번도 안 나오면 "WATCH 이상 못 찍음"으로 간주 가능.
+    (main.py가 WATCH 이상만 trend_features에 저장하므로, 등장=WATCH+)
     """
     q = text("""
       SELECT DISTINCT term
@@ -110,6 +49,53 @@ def get_active_terms_from_trend_features(window_days: int) -> Set[str]:
     """)
     with engine.begin() as conn:
         rows = conn.execute(q, {"days": int(window_days)}).fetchall()
+    return {norm(r[0]) for r in rows if r and r[0] is not None}
+
+
+def has_column(table: str, column: str) -> bool:
+    q = text("""
+      SELECT 1
+      FROM information_schema.columns
+      WHERE table_name = :t AND column_name = :c
+      LIMIT 1;
+    """)
+    with engine.begin() as conn:
+        return conn.execute(q, {"t": table, "c": column}).first() is not None
+
+
+def get_protected_terms_from_discovered(grace_days: int) -> Set[str]:
+    """
+    Grace period 보호 term 세트.
+    1) (있다면) discovered_terms.approved_at 최근 grace_days 이내
+    2) discovered_terms.last_seen 최근 grace_days 이내  (fallback)
+    - status는 approved/new 상관없이 보호(방금 promote/approve한 애들 보호 목적)
+    """
+    q_parts = []
+
+    # approved_at이 있으면 그걸 우선 사용
+    if has_column("discovered_terms", "approved_at"):
+        q_parts.append("""
+          SELECT DISTINCT term
+          FROM discovered_terms
+          WHERE approved_at IS NOT NULL
+            AND approved_at >= (NOW() - (:days || ' days')::interval)
+        """)
+
+    # fallback: last_seen
+    if has_column("discovered_terms", "last_seen"):
+        q_parts.append("""
+          SELECT DISTINCT term
+          FROM discovered_terms
+          WHERE last_seen IS NOT NULL
+            AND last_seen >= (NOW() - (:days || ' days')::interval)
+        """)
+
+    if not q_parts:
+        return set()
+
+    q = text(" UNION ".join(q_parts))
+    with engine.begin() as conn:
+        rows = conn.execute(q, {"days": int(grace_days)}).fetchall()
     return {norm(r[0]) for r in rows if r and r[0] is not None}
 
 
@@ -128,41 +114,29 @@ def reject_in_db(terms: List[str]) -> int:
         res = conn.execute(q, {"terms": terms})
     return res.rowcount or 0
 
-def get_recently_approved_terms(grace_days: int) -> Set[str]:
-    q = text("""
-      SELECT DISTINCT term
-      FROM discovered_terms
-      WHERE status='approved'
-        AND approved_at IS NOT NULL
-        AND approved_at >= (NOW() - (:days || ' days')::interval);
-    """)
-    with engine.begin() as conn:
-        rows = conn.execute(q, {"days": int(grace_days)}).fetchall()
-    return {norm(r[0]) for r in rows if r and r[0] is not None}
 
-
-
+# ------------------------------
+# Main
+# ------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Demote terms from seeds.yaml discovered_auto group.")
+    parser = argparse.ArgumentParser(
+        description="Demote terms from seeds.yaml discovered_auto group (safe mode with grace + data gate)."
+    )
     parser.add_argument("--seeds", default="app/seeds.yaml")
     parser.add_argument("--group", default="discovered_auto")
-    parser.add_argument("--grace-days", type=int, default=7,
-                    help="approved_at 기준으로 grace 기간(일). 이 기간 내 term은 강등 제외")
-    parser.add_argument("--grace-only-approved", action="store_true",
-                        help="approved_at이 없는 term은 grace 적용 없이 강등 대상으로 본다")
 
-
-    # (모드 1) 문자열 필터 기반 강등 옵션
-    parser.add_argument("--exclude", default="", help="comma-separated exclude tokens (override default)")
-    parser.add_argument("--include", default="", help="comma-separated include tokens (override default)")
-    parser.add_argument("--no-include-check", action="store_true", help="do not demote based on missing include tokens")
-
-    # (모드 2) 성과 기반 강등 옵션: trend_features에 최근 N일 WATCH+ 기록이 없으면 강등
+    # 성과 기반 강등
     parser.add_argument("--use-trend-features", action="store_true",
                         help="demote if term did NOT appear in trend_features within window-days")
     parser.add_argument("--window-days", type=int, default=14, help="7/14/30 등 강등 기준 기간")
 
-    # 수동 강등 목록
+    # Grace + 데이터 게이트
+    parser.add_argument("--grace-days", type=int, default=7,
+                        help="최근 grace-days 이내에 승인/발견 흔적이 있으면 강등 제외 (approved_at/last_seen 기반)")
+    parser.add_argument("--min-tf-count", type=int, default=200,
+                        help="최근 window-days 동안 trend_features 레코드가 이 수보다 적으면 강등을 스킵(초기/데이터부족 보호)")
+
+    # 수동 강등
     parser.add_argument("--terms", default="", help="comma-separated explicit terms to demote (manual list)")
 
     # 실행 옵션
@@ -190,29 +164,39 @@ def main():
     reasons: List[Tuple[str, str]] = []
 
     if args.use_trend_features:
-        active = get_active_terms_from_trend_features(args.window_days)
-        protected = get_recently_approved_terms(args.grace_days)
+        # ✅ 데이터 게이트: trend_features가 충분히 쌓이지 않았으면 강등 스킵
+        tf_cnt = trend_features_count(args.window_days)
+        if tf_cnt < args.min_tf_count:
+            print(
+                f"[SKIP] trend_features too small for last {args.window_days}d: "
+                f"{tf_cnt} rows < min_tf_count({args.min_tf_count}).\n"
+                f"→ This usually means monitoring hasn't run enough days yet. "
+                f"Increase --window-days, lower --min-tf-count, or run app.main daily."
+            )
+            # 이 경우 수동 강등만 반영 가능하게 하려면 아래 주석 해제
+            # demote_auto = []
+        else:
+            active = get_active_terms_from_trend_features(args.window_days)
+            protected = get_protected_terms_from_discovered(args.grace_days)
 
-        for t in arr:
-            nt = norm(t)
+            for t in arr:
+                nt = norm(t)
 
-            # ✅ grace 기간 보호
-            if nt in protected:
-                reasons.append((str(t), f"grace: approved < {args.grace_days}d"))
-                continue
+                # ✅ grace 보호: 최근 승인/발견 흔적이 있는 애들은 제외
+                if args.grace_days > 0 and nt in protected:
+                    reasons.append((str(t), f"grace: recent approved/seen < {args.grace_days}d"))
+                    continue
 
-            # (선택) approved_at이 없는 term은 보호 안 함(기본)
-            # args.grace_only_approved가 True면 여기서 별도로 처리할 수도 있음
-
-            if nt not in active:
-                demote_auto.append(str(t))
-                reasons.append((str(t), f"no WATCH+ in trend_features for {args.window_days}d"))
-
+                # ✅ 성과 없음: 최근 window-days 동안 WATCH+ 기록이 없으면 강등
+                if nt not in active:
+                    demote_auto.append(str(t))
+                    reasons.append((str(t), f"no WATCH+ in trend_features for {args.window_days}d"))
 
     else:
-        exclude = parse_csv_arg(args.exclude, DEFAULT_EXCLUDE)
-        include = [] if args.no_include_check else parse_csv_arg(args.include, DEFAULT_INCLUDE)
-        demote_auto, reasons = pick_demote_terms_by_text_filters(arr, exclude=exclude, include=include)
+        print("[INFO] This script is currently focused on --use-trend-features mode.")
+        print("       Run with --use-trend-features to demote based on WATCH+ inactivity.")
+        # 그래도 수동 강등은 할 수 있게
+        demote_auto = []
 
     # 최종 강등 리스트 = auto + manual (중복 제거, seeds에 실제 있는 것만)
     final: List[str] = []
@@ -225,8 +209,6 @@ def main():
         if k not in arr_norm_set:
             continue
         seen.add(k)
-        # 원본 arr에 있는 표기를 최대한 유지하고 싶으면 arr에서 찾아 가져오기
-        # 여기서는 입력값 t 그대로 사용
         final.append(t)
 
     print(f"[DEMOTE PREVIEW] group={args.group}  candidates={len(arr)}  demote={len(final)}")

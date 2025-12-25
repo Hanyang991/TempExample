@@ -1,0 +1,37 @@
+{% extends "dashboard/base.html" %}
+{% block content %}
+<h2>Discovery Inbox (status=new)</h2>
+
+<table>
+  <tr><th>term</th><th>geo_cnt</th><th>score</th><th>last_seen</th><th>actions</th></tr>
+  {% for r in rows %}
+  <tr id="row-{{ forloop.counter }}">
+    <td>{{ r.term }}</td>
+    <td>{{ r.geo_cnt }}</td>
+    <td>{{ r.max_score }}</td>
+    <td>{{ r.last_seen }}</td>
+    <td>
+      <button
+        hx-post="/discovery/approve/"
+        hx-vals='{"term":"{{ r.term|escapejs }}"}'
+        hx-target="#row-{{ forloop.counter }}"
+        hx-swap="outerHTML">
+        Approve
+      </button>
+      <button
+        hx-post="/discovery/reject/"
+        hx-vals='{"term":"{{ r.term|escapejs }}"}'
+        hx-target="#row-{{ forloop.counter }}"
+        hx-swap="outerHTML">
+        Reject
+      </button>
+    </td>
+  </tr>
+  {% endfor %}
+</table>
+
+<p class="card">
+  다음 단계: Approve된 term을 app.main 모니터링에 자동 포함시키는 옵션을 붙이거나,
+  seeds.yaml의 discovered_auto에 “승격”하는 버튼을 추가할 수 있어.
+</p>
+{% endblock %}

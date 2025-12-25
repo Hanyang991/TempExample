@@ -50,7 +50,7 @@ bash
 코드 복사
 python -m app.main daily
 
-python -m venv .venv
+python3 -m venv .venv
 docker-compose up -d
 
 1) seed 업데이트
@@ -65,7 +65,7 @@ python3 -m app.promote_seeds --limit 20 --group discovered_auto --approve
 
 3) 
 python3 -m app.backfill --months 3 --out backfill_events_last3m.csv
-
+python -m app.main
 강등
 python3 -m app.demote_seeds --group discovered_auto \
   --use-trend-features --window-days 14 --grace-days 7

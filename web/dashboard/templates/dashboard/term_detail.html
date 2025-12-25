@@ -1,0 +1,39 @@
+{% extends "dashboard/base.html" %}
+{% block content %}
+<h2>{{ term }}</h2>
+
+<div class="card">
+  <canvas id="chart" height="90"></canvas>
+</div>
+
+<h3>Events</h3>
+<table>
+  <tr><th>date</th><th>geo</th><th>z</th><th>wow</th><th>severity</th></tr>
+  {% for f in features %}
+  <tr>
+    <td>{{ f.as_of_date }}</td>
+    <td>{{ f.geo }}</td>
+    <td>{{ f.z_score|floatformat:2 }}</td>
+    <td>{{ f.wow_change|floatformat:2 }}</td>
+    <td>
+      {% if f.z_score >= 2.5 %}<span class="pill">BREAKOUT</span>
+      {% elif f.z_score >= 2.0 %}<span class="pill">RISING</span>
+      {% elif f.z_score >= 1.0 %}<span class="pill">WATCH</span>
+      {% else %}<span class="pill">NONE</span>
+      {% endif %}
+    </td>
+  </tr>
+  {% endfor %}
+
+</table>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+  const labels = {{ labels|safe }};
+  const values = {{ values|safe }};
+  new Chart(document.getElementById('chart'), {
+    type: 'line',
+    data: { labels, datasets: [{ label: 'interest', data: values }] },
+  });
+</script>
+{% endblock %}

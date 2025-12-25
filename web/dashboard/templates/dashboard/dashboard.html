@@ -1,0 +1,22 @@
+{% extends "dashboard/base.html" %}
+{% block content %}
+<h2>Dashboard (last {{days}}d)</h2>
+
+<div class="card">
+  <span class="pill">WATCH {{counts.WATCH}}</span>
+  <span class="pill">RISING {{counts.RISING}}</span>
+  <span class="pill">BREAKOUT {{counts.BREAKOUT}}</span>
+</div>
+
+<h3>Top terms</h3>
+<table>
+  <tr><th>term</th><th>count</th><th>last</th></tr>
+  {% for r in top_terms %}
+  <tr>
+    <td><a href="/term/{{ r.term|urlencode }}/">{{ r.term }}</a></td>
+    <td>{{ r.cnt }}</td>
+    <td>{{ r.last }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% endblock %}

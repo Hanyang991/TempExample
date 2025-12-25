@@ -1,0 +1,27 @@
+{% extends "dashboard/base.html" %}
+{% block content %}
+<h2>Trends Explorer</h2>
+
+<form method="get" class="card">
+  days: <input name="days" value="{{days}}" size="4"/>
+  geo: <input name="geo" value="{{geo}}" size="6"/>
+  severity:
+  <select name="severity">
+    <option value="" {% if not severity %}selected{% endif %}>ALL</option>
+    <option value="WATCH" {% if severity == "WATCH" %}selected{% endif %}>WATCH</option>
+    <option value="RISING" {% if severity == "RISING" %}selected{% endif %}>RISING</option>
+    <option value="BREAKOUT" {% if severity == "BREAKOUT" %}selected{% endif %}>BREAKOUT</option>
+    <option value="NONE" {% if severity == "NONE" %}selected{% endif %}>NONE</option>
+  </select>
+  q: <input name="q" value="{{q}}" size="24"/>
+  <button type="submit">Filter</button>
+
+  {# 정렬 상태 유지 #}
+  <input type="hidden" name="sort" value="{{sort}}">
+  <input type="hidden" name="dir" value="{{dir}}">
+</form>
+
+<div id="trends-table">
+  {% include "dashboard/_trends_table.html" %}
+</div>
+{% endblock %}
