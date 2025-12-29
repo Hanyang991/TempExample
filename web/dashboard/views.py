@@ -1,10 +1,10 @@
 from datetime import date, timedelta
 from django.db.models import Count, Max
-from django.http import HttpResponse, HttpResponseBadRequest
+from django.http import HttpResponse, HttpResponseBadRequest,JsonResponse
 from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
-
+from django.views.decorators.http import require_GET
 from .models import TrendFeature, TrendSeries, DiscoveredTerm
 
 from datetime import date, timedelta
@@ -113,29 +113,62 @@ def dashboard(request):
 def term_detail(request, term: str):
     start = date.today() - timedelta(days=90)
 
-    # ✅ trend_series: values로 가져오기 (id SELECT 방지)
-    series = (
+    # 1) geo 결정: ?geo=US 우선, 없으면 최근 feature에서 하나 기본값
+    geo = (request.GET.get("geo") or "").strip()
+
+    feats_qs = (
+        TrendFeature.objects
+        .filter(term=term, as_of_date__gte=start)
+        .order_by("-as_of_date", "-z_score")
+        .values("as_of_date", "geo", "z_score", "wow_change", "latest", "slope_7d")
+    )
+
+    geo_list_raw = (
+        TrendFeature.objects
+        .filter(term=term, as_of_date__gte=start)
+        .values_list("geo", flat=True)
+        .distinct()
+    )
+
+    # ✅ 공백 제거 + 대문자 통일 + 빈값 제거 + 중복 제거
+    geo_set = {g.strip().upper() for g in geo_list_raw if g and g.strip()}
+    geo_list = sorted(geo_set)
+
+
+    events = []
+    for f in list(feats_qs):
+        events.append({
+            "date": f["as_of_date"].isoformat(),
+            "z": float(f["z_score"]),
+            "wow": float(f["wow_change"]),
+            "severity": "BREAKOUT" if f["z_score"] >= 2.5 else ("RISING" if f["z_score"] >= 2.0 else ("WATCH" if f["z_score"] >= 1.0 else "NONE")),
+        })
+
+    if not geo:
+        first = feats_qs.first()
+        geo = first["geo"] if first else ""   # feature도 없으면 빈 값(차트는 에러 표시)
+
+    # 2) trend_series: geo까지 필터 (차트가 geo별로 정확히 뜸)
+    series_qs = (
         TrendSeries.objects
-        .filter(term=term, date__gte=start)
+        .filter(term=term, geo=geo, date__gte=start)
         .order_by("date")
         .values("date", "value")
     )
 
-    labels = [s["date"].isoformat() for s in series]
-    values = [float(s["value"]) for s in series]
+    labels = [s["date"].isoformat() for s in series_qs]
+    values = [float(s["value"]) for s in series_qs]
 
-    # ✅ trend_features도 values로 (나중에 여기서도 id 터질 수 있음)
-    feats = (
-        TrendFeature.objects
-        .filter(term=term, as_of_date__gte=start)
-        .order_by("-as_of_date", "-z_score")
-        .values("as_of_date", "geo", "z_score", "wow_change", "latest", "slope_7d")[:200]
-    )
+    # 3) Events: 기본은 해당 geo만 보여주고 싶으면 geo 필터(추천)
+    feats = feats_qs.filter(geo=geo)[:200]
 
     return render(request, "dashboard/term_detail.html", {
         "term": term,
+        "geo": geo,
+        "geo_list": geo_list, 
         "labels": labels,
         "values": values,
+        "events": events,
         "features": list(feats),
     })
 
@@ -155,6 +188,64 @@ def discovery_inbox(request):
 
     return render(request, "dashboard/discovery.html", {"rows": rows})
 
+@require_GET
+def api_term_series(request):
+    term = request.GET.get("term", "").strip()
+    geo = request.GET.get("geo", "").strip()
+    days = int(request.GET.get("days", "90"))
+
+    if not term or not geo:
+        return JsonResponse({"error": "term and geo are required"}, status=400)
+
+    start = date.today() - timedelta(days=days)
+
+    qs = (
+        TrendSeries.objects
+        .filter(term=term, geo=geo, date__gte=start)
+        .order_by("date")
+        .values("date", "value")
+    )
+
+    x = [r["date"].isoformat() for r in qs]
+    y = [float(r["value"]) for r in qs]
+
+    return JsonResponse({
+        "term": term,
+        "geo": geo,
+        "days": days,
+        "x": x,
+        "y": y,
+    })
+
+@require_GET
+def api_term_series_all_geo(request):
+    term = request.GET.get("term", "").strip()
+    days = int(request.GET.get("days", "90"))
+    if not term:
+        return JsonResponse({"error": "term is required"}, status=400)
+
+    start = date.today() - timedelta(days=days)
+
+    qs = (
+        TrendSeries.objects
+        .filter(term=term, date__gte=start)
+        .order_by("geo", "date")
+        .values("geo", "date", "value")
+    )
+
+    # geo별로 묶기
+    m = {}
+    for r in qs:
+        g = r["geo"]
+        m.setdefault(g, {"x": [], "y": []})
+        m[g]["x"].append(r["date"].isoformat())
+        m[g]["y"].append(float(r["value"]))
+
+    traces = []
+    for g, v in m.items():
+        traces.append({"name": g, "x": v["x"], "y": v["y"]})
+
+    return JsonResponse({"term": term, "days": days, "traces": traces})
 
 @require_POST
 def discovery_approve(request):
