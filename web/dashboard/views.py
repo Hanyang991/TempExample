@@ -113,63 +113,56 @@ def dashboard(request):
 def term_detail(request, term: str):
     start = date.today() - timedelta(days=90)
 
-    # 1) geo 결정: ?geo=US 우선, 없으면 최근 feature에서 하나 기본값
-    geo = (request.GET.get("geo") or "").strip()
-
-    feats_qs = (
-        TrendFeature.objects
-        .filter(term=term, as_of_date__gte=start)
-        .order_by("-as_of_date", "-z_score")
-        .values("as_of_date", "geo", "z_score", "wow_change", "latest", "slope_7d")
-    )
-
-    geo_list_raw = (
-        TrendFeature.objects
-        .filter(term=term, as_of_date__gte=start)
+    # geo 후보: 이 term에 실제 존재하는 geo를 distinct로 뽑고 정규화
+    series_geos = (
+        TrendSeries.objects
+        .filter(term=term, date__gte=start)
         .values_list("geo", flat=True)
         .distinct()
     )
+    geo_list = sorted({g.strip().upper() for g in series_geos if g and g.strip()})
 
-    # ✅ 공백 제거 + 대문자 통일 + 빈값 제거 + 중복 제거
-    geo_set = {g.strip().upper() for g in geo_list_raw if g and g.strip()}
-    geo_list = sorted(geo_set)
-
-
-    events = []
-    for f in list(feats_qs):
-        events.append({
-            "date": f["as_of_date"].isoformat(),
-            "z": float(f["z_score"]),
-            "wow": float(f["wow_change"]),
-            "severity": "BREAKOUT" if f["z_score"] >= 2.5 else ("RISING" if f["z_score"] >= 2.0 else ("WATCH" if f["z_score"] >= 1.0 else "NONE")),
-        })
-
-    if not geo:
-        first = feats_qs.first()
-        geo = first["geo"] if first else ""   # feature도 없으면 빈 값(차트는 에러 표시)
-
-    # 2) trend_series: geo까지 필터 (차트가 geo별로 정확히 뜸)
-    series_qs = (
+    geo = (request.GET.get("geo") or "ALL").strip().upper()
+    # series (단일 geo 기준)
+    series = (
         TrendSeries.objects
         .filter(term=term, geo=geo, date__gte=start)
         .order_by("date")
         .values("date", "value")
     )
+    labels = [s["date"].isoformat() for s in series]
+    values = [float(s["value"]) for s in series]
 
-    labels = [s["date"].isoformat() for s in series_qs]
-    values = [float(s["value"]) for s in series_qs]
+    # features (Events) - 단일 geo 기준
+    feats = (
+        TrendFeature.objects
+        .filter(term=term, geo=geo, as_of_date__gte=start)
+        .order_by("-as_of_date", "-z_score")
+        .values("as_of_date", "geo", "z_score", "wow_change", "latest", "slope_7d")[:200]
+    )
+    feats_list = list(feats)
 
-    # 3) Events: 기본은 해당 geo만 보여주고 싶으면 geo 필터(추천)
-    feats = feats_qs.filter(geo=geo)[:200]
+    # 이벤트 점용 데이터
+    events = []
+    for f in feats_list:
+        z = float(f["z_score"])
+        sev = "BREAKOUT" if z >= 2.5 else ("RISING" if z >= 2.0 else ("WATCH" if z >= 1.0 else "NONE"))
+        events.append({
+            "date": f["as_of_date"].isoformat(),
+            "geo": f["geo"],
+            "z": z,
+            "wow": float(f["wow_change"]),
+            "severity": sev,
+        })
 
     return render(request, "dashboard/term_detail.html", {
         "term": term,
         "geo": geo,
-        "geo_list": geo_list, 
+        "geo_list": geo_list,
         "labels": labels,
         "values": values,
+        "features": feats_list,
         "events": events,
-        "features": list(feats),
     })
 
 
@@ -191,7 +184,7 @@ def discovery_inbox(request):
 @require_GET
 def api_term_series(request):
     term = request.GET.get("term", "").strip()
-    geo = request.GET.get("geo", "").strip()
+    geo = request.GET.get("geo", "").strip().upper()
     days = int(request.GET.get("days", "90"))
 
     if not term or not geo:
@@ -209,18 +202,13 @@ def api_term_series(request):
     x = [r["date"].isoformat() for r in qs]
     y = [float(r["value"]) for r in qs]
 
-    return JsonResponse({
-        "term": term,
-        "geo": geo,
-        "days": days,
-        "x": x,
-        "y": y,
-    })
+    return JsonResponse({"term": term, "geo": geo, "days": days, "x": x, "y": y})
 
 @require_GET
 def api_term_series_all_geo(request):
     term = request.GET.get("term", "").strip()
     days = int(request.GET.get("days", "90"))
+
     if not term:
         return JsonResponse({"error": "term is required"}, status=400)
 
@@ -233,19 +221,20 @@ def api_term_series_all_geo(request):
         .values("geo", "date", "value")
     )
 
-    # geo별로 묶기
     m = {}
     for r in qs:
-        g = r["geo"]
+        g = (r["geo"] or "").strip().upper()
+        if not g:
+            continue
         m.setdefault(g, {"x": [], "y": []})
         m[g]["x"].append(r["date"].isoformat())
         m[g]["y"].append(float(r["value"]))
 
-    traces = []
-    for g, v in m.items():
-        traces.append({"name": g, "x": v["x"], "y": v["y"]})
+    traces = [{"geo": g, "x": v["x"], "y": v["y"]} for g, v in m.items()]
+    traces.sort(key=lambda t: t["geo"])
 
     return JsonResponse({"term": term, "days": days, "traces": traces})
+
 
 @require_POST
 def discovery_approve(request):

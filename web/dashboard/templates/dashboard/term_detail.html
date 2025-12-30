@@ -9,17 +9,16 @@
   <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
     <label for="geoSelect">Geo</label>
     <select id="geoSelect" onchange="onGeoChange(this.value)">
+      <option value="ALL" {% if geo == "ALL" %}selected{% endif %}>All</option>
       {% for g in geo_list %}
         <option value="{{ g }}" {% if g == geo %}selected{% endif %}>{{ g }}</option>
       {% endfor %}
     </select>
-
-    <button type="button" onclick="toggleAllGeo()">All geos</button>
   </div>
 </div>
 <!-- Plotly CDN: base.html에 넣어도 되고, 여기 넣어도 됨 -->
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
-
+{{ events|json_script:"events-data" }}
 <div class="card" style="padding:12px; margin-bottom:12px;">
   <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
     <strong>Trend (Google Trends)</strong>
@@ -60,37 +59,35 @@
 
 <script>
   let currentDays = 90;
-  let mode = "single"; // "single" | "all"
 
   function onGeoChange(newGeo) {
     const el = document.getElementById("seriesChart");
     el.dataset.geo = newGeo;
-    mode = "single";
-    render();
+    loadSeries(currentDays);
   }
 
-  function toggleAllGeo() {
-    mode = (mode === "all") ? "single" : "all";
-    render();
+  function loadSeries(days) {
+    currentDays = days;
+    renderChart();
   }
 
-  async function render() {
+  async function renderChart() {
     const el = document.getElementById("seriesChart");
     const term = el.dataset.term;
     const geo = el.dataset.geo;
 
-    if (mode === "all") {
+    // ===== ALL geos =====
+    if (geo === "ALL") {
       const url = `/api/term-series-all-geo/?term=${encodeURIComponent(term)}&days=${currentDays}`;
       const res = await fetch(url);
       const data = await res.json();
 
-      if (!res.ok || data.error) {
-        el.innerHTML = `<div style="padding:12px;color:#b00">API error: ${res.status} ${data.error || ""}</div>`;
-        return;
-      }
-
       const traces = data.traces.map(t => ({
-        x: t.x, y: t.y, type: "scatter", mode: "lines", name: t.name,
+        x: t.x,
+        y: t.y,
+        type: "scatter",
+        mode: "lines",
+        name: t.geo,
       }));
 
       Plotly.newPlot(el, traces, {
@@ -98,38 +95,72 @@
         xaxis: {title: "Date"},
         yaxis: {title: "Interest"},
         hovermode: "x unified",
-        legend: {orientation: "h"},
+        showlegend: false,
       }, {responsive: true});
 
-    } else {
-      const url = `/api/term-series/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}&days=${currentDays}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        el.innerHTML = `<div style="padding:12px;color:#b00">API error: ${res.status} ${data.error || ""}</div>`;
-        return;
-      }
-
-      Plotly.newPlot(el, [{
-        x: data.x, y: data.y, type: "scatter", mode: "lines",
-        name: `${data.term} (${data.geo})`,
-      }], {
-        margin: {t: 20, r: 10, b: 40, l: 50},
-        xaxis: {title: "Date"},
-        yaxis: {title: "Interest"},
-        hovermode: "x unified",
-      }, {responsive: true});
+      return;
     }
-  }
 
-  function loadSeries(days) {
-    currentDays = days;
-    render();
+    // ===== Single geo =====
+    const url = `/api/term-series/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}&days=${currentDays}`;
+    const res = await fetch(url);
+    const data = await res.json();
+
+    const seriesTrace = {
+      x: data.x,
+      y: data.y,
+      type: "scatter",
+      mode: "lines",
+    };
+
+    // 이벤트 점
+    const valueByDate = new Map();
+    for (let i = 0; i < data.x.length; i++) {
+      valueByDate.set(data.x[i], data.y[i]);
+    }
+
+    const eventsEl = document.getElementById("events-data");
+    const events = eventsEl
+      ? JSON.parse(eventsEl.textContent).filter(
+          e => e.severity !== "NONE" && e.geo === geo
+        )
+      : [];
+
+    const evX = [];
+    const evY = [];
+    const evText = [];
+
+    for (const e of events) {
+      const y = valueByDate.get(e.date);
+      if (y === undefined) continue;
+      evX.push(e.date);
+      evY.push(y);
+      evText.push(`${e.severity}<br>z=${e.z.toFixed(2)}<br>wow=${e.wow.toFixed(2)}`);
+    }
+
+    const eventTrace = {
+      x: evX,
+      y: evY,
+      type: "scatter",
+      mode: "markers",
+      marker: { size: 10 },
+      showlegend: false,
+      hovertemplate: "%{text}<extra></extra>",
+    };
+
+    Plotly.newPlot(el, [seriesTrace, eventTrace], {
+      margin: {t: 20, r: 10, b: 40, l: 50},
+      xaxis: {title: "Date"},
+      yaxis: {title: "Interest"},
+      hovermode: "x unified",
+      showlegend: false,
+    }, {responsive: true});
   }
 
   loadSeries(90);
+
 </script>
+
 
 
 {% endblock %}
