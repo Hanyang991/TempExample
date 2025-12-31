@@ -101,8 +101,8 @@ def run():
                 z=sig.z_score,
                 slope=sig.slope_7d,
                 latest=sig.latest,
-                severity=severity,
-                evidence=sig.evidence,
+                severity=sig.severity,          # ✅ 추가
+                evidence=sig.evidence,          # ✅ 추가 (없으면 제거 가능)
             )
 
             fired[severity] = fired.get(severity, 0) + 1
@@ -300,4 +300,3 @@ if __name__ == "__main__":
     else:
         print(_usage())
         raise SystemExit(2)
-    

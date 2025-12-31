@@ -13,22 +13,6 @@ class TrendSeries(models.Model):
         managed = False
 
 
-class TrendFeature(models.Model):
-    term = models.TextField()
-    geo = models.TextField()
-    as_of_date = models.DateField()
-
-    wow_change = models.FloatField()
-    z_score = models.FloatField()
-    slope_7d = models.FloatField()
-    latest = models.FloatField()
-    computed_at = models.DateTimeField()
-
-    class Meta:
-        db_table = "trend_features"
-        managed = False
-
-
 class DiscoveredTerm(models.Model):
     term = models.TextField(primary_key=False)
     geo = models.TextField(primary_key=False)
@@ -61,3 +45,22 @@ class Alert(models.Model):
     class Meta:
         db_table = "alerts"
         managed = False  # ✅ 마이그레이션 안 함
+
+
+class TrendFeature(models.Model):
+    term = models.TextField()
+    geo = models.TextField()
+    as_of_date = models.DateField()
+    wow_change = models.FloatField()
+    z_score = models.FloatField()
+    slope_7d = models.FloatField()
+    latest = models.FloatField()
+    computed_at = models.DateTimeField(auto_now=True)
+
+    # ✅ 추가
+    severity = models.TextField(null=True, blank=True)
+
+    class Meta:
+        db_table = "trend_features"
+        unique_together = ("term", "geo", "as_of_date")
+
