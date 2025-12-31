@@ -1,24 +1,28 @@
 {% extends "dashboard/base.html" %}
 {% block content %}
+
 <h2>{{ term }}</h2>
+
 <div style="display:flex; gap:10px; align-items:center; margin: 10px 0 16px;">
   <div>
     <strong>{{ term }}</strong>
+    <button type="button" onclick="openAiPanel()">AI 분석</button>
   </div>
 
   <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
     <label for="geoSelect">Geo</label>
     <select id="geoSelect" onchange="onGeoChange(this.value)">
-      <option value="ALL" {% if geo == "ALL" %}selected{% endif %}>All</option>
+      <option value="ALL" {% if geo == "ALL" %}selected{% endif %}>All geos</option>
       {% for g in geo_list %}
         <option value="{{ g }}" {% if g == geo %}selected{% endif %}>{{ g }}</option>
       {% endfor %}
     </select>
   </div>
 </div>
-<!-- Plotly CDN: base.html에 넣어도 되고, 여기 넣어도 됨 -->
+
 <script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 {{ events|json_script:"events-data" }}
+
 <div class="card" style="padding:12px; margin-bottom:12px;">
   <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
     <strong>Trend (Google Trends)</strong>
@@ -29,46 +33,90 @@
     </div>
   </div>
 
-  <!-- ✅ id는 하나만, data-*도 여기 달기 -->
   <div id="seriesChart"
-    data-term="{{ term|escapejs }}"
-    data-geo="{{ geo|default:''|escapejs }}"
-    style="height:360px;">
-  </div>
+       data-term="{{ term|escapejs }}"
+       data-geo="{{ geo|escapejs }}"
+       style="height:360px;"></div>
 </div>
 
 <h3>Events</h3>
-<table>
-  <tr><th>date</th><th>geo</th><th>z</th><th>wow</th><th>severity</th></tr>
-  {% for f in features %}
-  <tr>
-    <td>{{ f.as_of_date }}</td>
-    <td>{{ f.geo }}</td>
-    <td>{{ f.z_score|floatformat:2 }}</td>
-    <td>{{ f.wow_change|floatformat:2 }}</td>
-    <td>
-      {% if f.z_score >= 2.5 %}<span class="pill">BREAKOUT</span>
-      {% elif f.z_score >= 2.0 %}<span class="pill">RISING</span>
-      {% elif f.z_score >= 1.0 %}<span class="pill">WATCH</span>
-      {% else %}<span class="pill">NONE</span>
-      {% endif %}
-    </td>
-  </tr>
-  {% endfor %}
-</table>
+<div id="eventsTable"></div>
+
+<!-- Backdrop -->
+<div id="aiPanelBackdrop"
+     onclick="closeAiPanel()"
+     style="
+       display:none;
+       position:fixed;
+       inset:0;
+       background:rgba(0,0,0,.25);
+       z-index:9998;
+     ">
+</div>
+
+<!-- Slide Panel -->
+<div id="aiPanel"
+     style="
+       display:none;                 /* ✅ 기본은 완전 숨김 */
+       position:fixed;
+       top:0;
+       right:0;
+       width:420px;
+       height:100vh;
+       background:#fff;
+       border-left:1px solid #ddd;
+       padding:14px;
+       box-shadow:-8px 0 24px rgba(0,0,0,.12);
+       z-index:9999;
+     ">
+  <div style="display:flex; align-items:center; gap:8px;">
+    <strong>AI 분석</strong>
+    <div style="margin-left:auto; display:flex; gap:6px;">
+      <button type="button" onclick="sendAiToSlack()">Slack로 보내기</button>
+      <button type="button" onclick="closeAiPanel()">닫기</button>
+    </div>
+  </div>
+
+  <div id="aiPanelBody" style="margin-top:10px;">
+    <div style="color:#666;">AI 분석을 불러오는 중...</div>
+  </div>
+</div>
+
+
 
 <script>
   let currentDays = 90;
+  function refreshEventsTable() {
+    const chartEl = document.getElementById("seriesChart");
+    const term = chartEl.dataset.term;
+    const geo = chartEl.dataset.geo;
+
+    const url = `/events-table/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}&days=${currentDays}`;
+    htmx.ajax("GET", url, { target: "#eventsTable", swap: "innerHTML" });
+  }
 
   function onGeoChange(newGeo) {
-    const el = document.getElementById("seriesChart");
-    el.dataset.geo = newGeo;
-    loadSeries(currentDays);
+    const chartEl = document.getElementById("seriesChart");
+    chartEl.dataset.geo = newGeo;
+
+    loadSeries(currentDays);     // 차트 갱신
+    refreshEventsTable();        // ✅ 테이블 갱신
+    if (document.getElementById("aiPanel").style.right === "0px") {
+      loadAiAnalysis(); // geo 바뀌면 분석도 다시
+    }
   }
+
 
   function loadSeries(days) {
     currentDays = days;
     renderChart();
+    refreshEventsTable();        // ✅ 기간 바뀌면 테이블도 갱신
+  }
+
+
+  function getEvents() {
+    const el = document.getElementById("events-data");
+    return el ? JSON.parse(el.textContent) : [];
   }
 
   async function renderChart() {
@@ -76,21 +124,77 @@
     const term = el.dataset.term;
     const geo = el.dataset.geo;
 
-    // ===== ALL geos =====
     if (geo === "ALL") {
       const url = `/api/term-series-all-geo/?term=${encodeURIComponent(term)}&days=${currentDays}`;
       const res = await fetch(url);
       const data = await res.json();
 
-      const traces = data.traces.map(t => ({
-        x: t.x,
-        y: t.y,
-        type: "scatter",
-        mode: "lines",
-        name: t.geo,
+      if (!res.ok || data.error) {
+        el.innerHTML = `<div style="padding:12px;color:#b00">API error: ${res.status} ${data.error || ""}</div>`;
+        return;
+      }
+
+      // line traces
+      const lineTraces = data.traces.map(t => ({
+        x: t.x, y: t.y,
+        type: "scatter", mode: "lines",
+        showlegend: false,
+        hoverinfo: "skip",
       }));
 
-      Plotly.newPlot(el, traces, {
+      // events overlay (geo별로 점 찍기)
+      const events = getEvents().filter(e => e.severity !== "NONE");
+
+      // geo -> Map(date->value)
+      const seriesMap = new Map();
+      for (const t of data.traces) {
+        const m = new Map();
+        for (let i = 0; i < t.x.length; i++) m.set(t.x[i], t.y[i]);
+        seriesMap.set(t.geo, m);
+      }
+
+      const byGeo = new Map();
+      for (const e of events) {
+        const g = (e.geo || "").toUpperCase();
+        if (!byGeo.has(g)) byGeo.set(g, []);
+        byGeo.get(g).push(e);
+      }
+
+      const eventTraces = [];
+      for (const [g, evs] of byGeo.entries()) {
+        const m = seriesMap.get(g);
+        if (!m) continue;
+
+        const evX = [];
+        const evY = [];
+        const evText = [];
+
+        for (const e of evs) {
+          const y = m.get(e.date);
+          if (y === undefined) continue;
+          evX.push(e.date);
+          evY.push(y);
+          evText.push(`${e.severity}`);
+        }
+
+        if (evX.length === 0) continue;
+
+        eventTraces.push({
+          x: evX,
+          y: evY,
+          type: "scatter",
+          mode: "markers",
+          marker: { size: 10 },
+          customdata: evText,
+          hovertemplate:
+            "<b>%{x}</b><br>" +
+            "<b>%{customdata}</b>" +
+            "<extra></extra>",
+          showlegend: false,
+        });
+      }
+
+      Plotly.newPlot(el, [...lineTraces, ...eventTraces], {
         margin: {t: 20, r: 10, b: 40, l: 50},
         xaxis: {title: "Date"},
         yaxis: {title: "Interest"},
@@ -101,30 +205,30 @@
       return;
     }
 
-    // ===== Single geo =====
+    // single geo
     const url = `/api/term-series/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}&days=${currentDays}`;
     const res = await fetch(url);
     const data = await res.json();
+
+    if (!res.ok || data.error) {
+      el.innerHTML = `<div style="padding:12px;color:#b00">API error: ${res.status} ${data.error || ""}</div>`;
+      return;
+    }
 
     const seriesTrace = {
       x: data.x,
       y: data.y,
       type: "scatter",
       mode: "lines",
+      hoverinfo: "skip",
+      showlegend: false,
     };
 
-    // 이벤트 점
+    // event markers for this geo
     const valueByDate = new Map();
-    for (let i = 0; i < data.x.length; i++) {
-      valueByDate.set(data.x[i], data.y[i]);
-    }
+    for (let i = 0; i < data.x.length; i++) valueByDate.set(data.x[i], data.y[i]);
 
-    const eventsEl = document.getElementById("events-data");
-    const events = eventsEl
-      ? JSON.parse(eventsEl.textContent).filter(
-          e => e.severity !== "NONE" && e.geo === geo
-        )
-      : [];
+    const events = getEvents().filter(e => e.severity !== "NONE" && (e.geo || "").toUpperCase() === geo);
 
     const evX = [];
     const evY = [];
@@ -135,7 +239,8 @@
       if (y === undefined) continue;
       evX.push(e.date);
       evY.push(y);
-      evText.push(`${e.severity}<br>z=${e.z.toFixed(2)}<br>wow=${e.wow.toFixed(2)}`);
+      evText.push(`${e.severity}`);
+
     }
 
     const eventTrace = {
@@ -144,8 +249,12 @@
       type: "scatter",
       mode: "markers",
       marker: { size: 10 },
+      customdata: evText,          // ✅ 문자열 배열(원하면)
+      hovertemplate:
+        "<b>%{x}</b><br>" +
+        "<b>%{customdata}</b>" +
+        "<extra></extra>",         // ✅ trace 0 제거
       showlegend: false,
-      hovertemplate: "%{text}<extra></extra>",
     };
 
     Plotly.newPlot(el, [seriesTrace, eventTrace], {
@@ -158,9 +267,109 @@
   }
 
   loadSeries(90);
+  refreshEventsTable();
 
+
+  let aiAnalysisCache = null;
+
+  function openAiPanel() {
+    const panel = document.getElementById("aiPanel");
+    const backdrop = document.getElementById("aiPanelBackdrop");
+
+    backdrop.style.display = "block";
+    panel.style.display = "block";   // ✅ 여기서 처음 등장
+
+    loadAiAnalysis();
+  }
+
+  function closeAiPanel() {
+    document.getElementById("aiPanelBackdrop").style.display = "none";
+    document.getElementById("aiPanel").style.display = "none";
+  }
+
+
+  async function loadAiAnalysis() {
+    const el = document.getElementById("seriesChart");
+    const term = el.dataset.term;
+    const geo = el.dataset.geo || "ALL";
+
+    const body = document.getElementById("aiPanelBody");
+    body.innerHTML = `<div style="color:#666;">AI 분석을 불러오는 중...</div>`;
+
+    const res = await fetch(`/api/term-ai/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}`);
+    const data = await res.json();
+
+    if (!res.ok || data.error) {
+      body.innerHTML = `<div style="color:#b00;">오류: ${data.error || res.status}</div>`;
+      return;
+    }
+
+    aiAnalysisCache = data;
+
+    body.innerHTML = `
+      <div><b>Summary</b><div style="margin:6px 0 12px;">${escapeHtml(data.summary || "")}</div></div>
+
+      <div><b>Intents</b>
+        <div style="margin:6px 0 12px;">${(data.intents||[]).map(x=>`<span class="pill">${escapeHtml(x)}</span>`).join(" ")}</div>
+      </div>
+
+      <div><b>Angles</b>
+        <ul>${(data.angles||[]).map(a=>`<li>${escapeHtml(a)}</li>`).join("")}</ul>
+      </div>
+
+      <div><b>Actions</b>
+        <div style="margin-top:6px;"><u>Content</u>
+          <ul>${((data.actions||{}).content||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>
+        </div>
+        <div><u>Commerce</u>
+          <ul>${((data.actions||{}).commerce||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>
+        </div>
+        <div><u>Risk notes</u>
+          <ul>${((data.actions||{}).risk_notes||[]).map(x=>`<li>${escapeHtml(x)}</li>`).join("")}</ul>
+        </div>
+      </div>
+    `;
+  }
+
+  async function sendAiToSlack() {
+    if (!aiAnalysisCache) {
+      alert("분석 결과가 아직 없습니다.");
+      return;
+    }
+    const el = document.getElementById("seriesChart");
+    const term = el.dataset.term;
+    const geo = el.dataset.geo || "ALL";
+
+    const res = await fetch("/api/term-ai/slack/", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-CSRFToken": getCookie("csrftoken"),
+      },
+      body: JSON.stringify({ term, geo, analysis: aiAnalysisCache }),
+    });
+
+    const data = await res.json().catch(()=>({}));
+    if (!res.ok || data.ok === false) {
+      alert("Slack 전송 실패: " + (data.error || res.status));
+      return;
+    }
+    alert("Slack으로 전송 완료!");
+  }
+
+  function getCookie(name) {
+    const v = document.cookie.match("(^|;)\\s*" + name + "\\s*=\\s*([^;]+)");
+    return v ? v.pop() : "";
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
 </script>
-
-
 
 {% endblock %}

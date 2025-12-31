@@ -1,0 +1,12 @@
+<table>
+  <tr><th>date</th><th>geo</th><th>z</th><th>wow</th><th>severity</th></tr>
+  {% for f in features %}
+  <tr>
+    <td>{{ f.as_of_date }}</td>
+    <td>{{ f.geo }}</td>
+    <td>{{ f.z_score|floatformat:2 }}</td>
+    <td>{{ f.wow_change|floatformat:2 }}</td>
+    <td><span class="pill">{{ f.severity }}</span></td>
+  </tr>
+  {% endfor %}
+</table>

@@ -11,6 +11,7 @@ urlpatterns = [
     path("api/term-series/", views.api_term_series, name="api_term_series"),
     path("api/term-series-all-geo/", views.api_term_series_all_geo, name="api_term_series_all_geo"),
 
-    
+    # partials (htmx)
+    path("events-table/", views.events_table, name="events_table"),
 
 ]

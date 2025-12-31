@@ -47,3 +47,17 @@ class DiscoveredTerm(models.Model):
         db_table = "discovered_terms"
         managed = False
         unique_together = (("term", "geo"),)
+
+class Alert(models.Model):
+    term = models.TextField()
+    geo = models.TextField()
+    severity = models.TextField()
+    fired_at = models.DateTimeField()
+    slack_channel = models.TextField(null=True, blank=True)
+    slack_ts = models.TextField(null=True, blank=True)
+    status = models.TextField()
+    cooldown_until = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        db_table = "alerts"
+        managed = False  # ✅ 마이그레이션 안 함
