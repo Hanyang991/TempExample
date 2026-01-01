@@ -347,8 +347,10 @@ def api_term_has_today_event(request):
 
     if not term:
         return JsonResponse({"error": "term is required"}, status=400)
+    
+    today = timezone.localdate()
 
-    qs = TrendFeature.objects.filter(term=term, as_of_date=date.today())
+    qs = TrendFeature.objects.filter(term=term, as_of_date=today)
     if geo != "ALL":
         qs = qs.filter(geo=geo)
 

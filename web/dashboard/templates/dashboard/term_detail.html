@@ -134,7 +134,14 @@ async function updateAiButtonState() {
 
     window.__hasTodayEvent = !!data.has_today_event;
     console.log(window.__hasTodayEvent);
-    if (window.__hasTodayEvent) {
+    if(geo == "ALL")
+    {
+      btn.disabled = true;
+      btn.style.opacity = ".4";
+      btn.style.cursor = "not-allowed";
+      btn.title = "전체 국가에서는 선택 불가능합니다";
+    }
+    else if (window.__hasTodayEvent) {
       btn.disabled = false;
       btn.style.opacity = "";
       btn.style.cursor = "";
@@ -308,6 +315,7 @@ async function renderChart() {
   }
 
 async function openAI() {
+  console.log(window.__hasTodayEvent)
   if (!window.__hasTodayEvent) {
     alert("오늘 감지된 이벤트가 있을 때만 AI 분석이 가능합니다.");
     return;
@@ -316,11 +324,6 @@ async function openAI() {
   const term = "{{ term|escapejs }}";
   const geo = document.getElementById("geoSelect")?.value || "ALL";
   const key = `${term}||${geo}`; // ✅ 캐시 키
-  const enabled = {{ has_today_event|yesno:"true,false" }};
-  if (!enabled) {
-    alert("오늘 감지된 트렌드 이벤트가 있을 때만 AI 분석이 가능합니다.");
-    return;
-  }
 
   // 패널 열기
   document.getElementById("aiPanel").style.display = "block";
