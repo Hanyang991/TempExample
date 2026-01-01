@@ -13,21 +13,22 @@ SYSTEM_PROMPT = """
 반드시 한국어로 작성하고, JSON 형식으로만 응답해.
 """
 
+
 def analyze_term(term: str, geo: str, metrics: dict) -> dict:
     prompt = f"""
-분석 키워드: "{term}"
-지역: "{geo}"
-핵심 지표 데이터: {json.dumps(metrics)}
+    분석 키워드: "{term}"
+    지역: "{geo}"
+    핵심 지표 데이터: {json.dumps(metrics)}
 
-위 데이터를 바탕으로 다음 항목을 분석해서 JSON으로 반환해:
-1. expectation (기대 포인트)
-2. importance (왜 중요한가)
-3. actions (추천 액션 리스트)
-"""
+    위 데이터를 바탕으로 다음 항목을 분석해서 JSON으로 반환해:
+    1. expectation (기대 포인트)
+    2. importance (왜 중요한가)
+    3. actions (추천 액션 리스트)
+    """
 
-    # 최신 SDK 호출 방식
     response = client.models.generate_content(
-        model="gemini-3-flash-preview", 
+        # model="gemini-3-flash-preview", 
+        model = "gemini-2.5-flash-lite",
         contents=prompt,
         config={
             "system_instruction": SYSTEM_PROMPT,

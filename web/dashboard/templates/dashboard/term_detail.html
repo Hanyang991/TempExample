@@ -6,7 +6,18 @@
 <div style="display:flex; gap:10px; align-items:center; margin: 10px 0 16px;">
   <div>
     <strong>{{ term }}</strong>
-    <button type="button" onclick="openAI()">AI 분석</button>
+    <button 
+      id = "aiBtn"
+      type="button"
+      onclick="openAI()"
+      {% if not has_today_event %}
+        disabled
+        title="오늘 감지된 트렌드 이벤트가 있을 때만 분석 가능합니다"
+        style="opacity:.4; cursor:not-allowed;"
+      {% endif %}
+    >
+      AI 분석
+    </button>
   </div>
 
   <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
@@ -84,6 +95,18 @@
 let currentDays = 90;
 let aiAnalysisCache = null;
 
+
+/* helper */
+window.__aiCache = window.__aiCache || new Map();      // key -> data
+window.__aiInFlight = window.__aiInFlight || new Map(); // key -> Promise
+window.__hasTodayEvent = {{ has_today_event|yesno:"true,false" }};
+
+document.addEventListener("DOMContentLoaded", () => {
+  loadSeries(90);
+  refreshEventsTable();
+  updateAiButtonState();
+});
+
 /* ================= Events Table ================= */
 function refreshEventsTable() {
   const el = document.getElementById("seriesChart");
@@ -95,11 +118,55 @@ function refreshEventsTable() {
 }
 
 /* ================= Geo / Period ================= */
+
+async function updateAiButtonState() {
+  console.log("onGeoChange");
+  const term = document.getElementById("seriesChart").dataset.term;
+  const geo = document.getElementById("seriesChart").dataset.geo || "ALL";
+
+  const btn = document.getElementById("aiBtn");
+
+  try {
+    const res = await fetch(`/api/term-has-today-event/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}`);
+    const data = await res.json().catch(()=>({}));
+
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    window.__hasTodayEvent = !!data.has_today_event;
+    console.log(window.__hasTodayEvent);
+    if (window.__hasTodayEvent) {
+      btn.disabled = false;
+      btn.style.opacity = "";
+      btn.style.cursor = "";
+      btn.title = "";
+    } else {
+      btn.disabled = true;
+      btn.style.opacity = ".4";
+      btn.style.cursor = "not-allowed";
+      btn.title = "오늘 감지된 이벤트가 있을 때만 분석 가능합니다";
+      // 패널 열려있으면 닫아버리기(선택)
+      closeAI();
+    }
+  } catch (e) {
+    // 실패하면 안전하게 비활성화(쿼터 보호)
+    console.warn("updateAiButtonState failed:", e);
+    btn.disabled = true;
+    btn.style.opacity = ".4";
+    btn.style.cursor = "not-allowed";
+    btn.title = "이벤트 확인 실패로 분석이 잠시 비활성화되었습니다";
+    hint.textContent = "(이벤트 확인 실패)";
+    window.__hasTodayEvent = false;
+  }
+}
+
 function onGeoChange(newGeo) {
   const el = document.getElementById("seriesChart");
   el.dataset.geo = newGeo;
   loadSeries(currentDays);
   refreshEventsTable();
+  updateAiButtonState();
+  window.__aiAnalysis = null;
+  aiAnalysisCache = null;
 }
 
 function loadSeries(days) {
@@ -196,18 +263,130 @@ async function renderChart() {
 }
 
 /* ================= AI Panel ================= */
-function openAI() {
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderMetrics(m) {
+    const wow = (m?.wow ?? 0);
+    const z = (m?.z_score ?? m?.z ?? 0);   // z_score / z 둘다 대응
+    const slope = (m?.slope ?? 0);
+
+    return `
+      <div class="ai-metrics">
+        <span>WoW <b>${(Number(wow) * 100).toFixed(1)}%</b></span>
+        <span>Z <b>${Number(z).toFixed(2)}</b></span>
+        <span>Slope <b>${Number(slope).toFixed(2)}</b></span>
+      </div>
+    `;
+  }
+
+  function renderSection(title, text) {
+    return `
+      <div class="ai-section">
+        <h4>${escapeHtml(title)}</h4>
+        <p style="white-space:pre-wrap; line-height:1.6;">${escapeHtml(text)}</p>
+      </div>
+    `;
+  }
+
+  function renderListSection(title, items) {
+    const arr = Array.isArray(items) ? items : [];
+    return `
+      <div class="ai-section">
+        <h4>${escapeHtml(title)}</h4>
+        <ul>
+          ${arr.map(x => `<li>${escapeHtml(x)}</li>`).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+async function openAI() {
+  if (!window.__hasTodayEvent) {
+    alert("오늘 감지된 이벤트가 있을 때만 AI 분석이 가능합니다.");
+    return;
+  }
+
   const term = "{{ term|escapejs }}";
   const geo = document.getElementById("geoSelect")?.value || "ALL";
+  const key = `${term}||${geo}`; // ✅ 캐시 키
+  const enabled = {{ has_today_event|yesno:"true,false" }};
+  if (!enabled) {
+    alert("오늘 감지된 트렌드 이벤트가 있을 때만 AI 분석이 가능합니다.");
+    return;
+  }
 
-  //  보이게
+  // 패널 열기
   document.getElementById("aiPanel").style.display = "block";
   document.getElementById("aiPanelBackdrop").style.display = "block";
 
-  document.getElementById("aiContent").innerHTML = "AI 분석 중...";
-  
-  fetch(`{% url 'api_term_ai' %}?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}`)
+  const contentEl = document.getElementById("aiContent");
+  contentEl.innerHTML = "AI 분석 중...";
+
+  try {
+    // ✅ 캐시 있으면 바로 렌더
+    const cached = window.__aiCache.get(key);
+    if (cached) {
+      renderAi(cached);
+      return;
+    }
+
+    // ✅ 동일 요청 중복 방지 (버튼 연타/geo 변경)
+    if (window.__aiInFlight.has(key)) {
+      const data = await window.__aiInFlight.get(key);
+      renderAi(data);
+      return;
+    }
+
+    const p = fetch(`/api/term-ai/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}`)
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        return d;
+      })
+      .finally(() => {
+        window.__aiInFlight.delete(key);
+      });
+
+    window.__aiInFlight.set(key, p);
+
+    const data = await p;
+
+    // ✅ 응답 구조 검증 (analysis 없으면 캐시하지 않음)
+    if (!data || !data.analysis || typeof data.analysis !== "object") {
+      throw new Error("Invalid AI response: analysis missing");
+    }
+
+    // ✅ 성공한 것만 캐시
+    window.__aiCache.set(key, data);
+
+    renderAi(data);
+  } catch (err) {
+    console.error("AI 분석 에러:", err);
+    contentEl.innerHTML = `<div style="color:#b00;">AI 분석 실패: ${escapeHtml(err?.message || err)}</div>`;
+  }
 }
+
+// ✅ 렌더 함수: 응답 구조 방어
+function renderAi(d) {
+  const a = d.analysis || {};
+  document.getElementById("aiContent").innerHTML = `
+    ${renderMetrics(d.metrics || {})}
+    ${renderSection("기대 포인트", a.expectation || "")}
+    ${renderSection("왜 중요한가", a.importance || "")}
+    ${renderListSection("추천 액션", Array.isArray(a.actions) ? a.actions : [])}
+  `;
+  // Slack 전송용으로 현재 선택 결과도 저장
+  window.__aiAnalysis = d;
+  aiAnalysisCache = d;
+}
+
 
 function closeAI() {
   //  다시 완전 비노출

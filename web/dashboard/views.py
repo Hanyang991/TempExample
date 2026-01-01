@@ -11,6 +11,8 @@ from django.views.decorators.csrf import csrf_exempt
 from .gemini_client import analyze_term
 from datetime import date, timedelta
 from django.db.models import Count, Max
+
+import traceback
 ALERT_WINDOW_DAYS = 7
 ALLOWED_SORTS = {
     "date": "as_of_date",
@@ -89,6 +91,7 @@ def dashboard(request):
 
     # trend_features에는 severity 컬럼이 없으므로 z_score 구간으로 계산
     counts = {
+        # "EMERGING": 
         "WATCH": qs.filter(z_score__gte=1.0, z_score__lt=2.0).count(),
         "RISING": qs.filter(z_score__gte=2.0, z_score__lt=2.5).count(),
         "BREAKOUT": qs.filter(z_score__gte=2.5).count(),
@@ -101,16 +104,21 @@ def dashboard(request):
         .order_by("-max_z", "-cnt", "-last")[:10]
     )
 
+    # emerging_terms = (
+
+    # )
+
     return render(request, "dashboard/dashboard.html", {
         "days": days,
         "counts": counts,
         "top_terms": top_terms,
+        # "emerging_terms": emerging_terms,
     })
 
 def term_detail(request, term: str):
     # 기본 90일
     start = date.today() - timedelta(days=90)
-
+    today = date.today()
     # term에 실제 존재하는 geo 목록
     series_geos = (
         TrendSeries.objects
@@ -119,11 +127,21 @@ def term_detail(request, term: str):
         .distinct()
     )
     geo_list = sorted({g.strip().upper() for g in series_geos if g and g.strip()})
-
+    
     #   기본 geo는 ALL
     geo = (request.GET.get("geo") or "ALL").strip().upper()
     if geo != "ALL" and geo_list and geo not in geo_list:
         geo = "ALL"
+
+    qs_today = TrendFeature.objects.filter(
+        term=term,
+        as_of_date=today,
+    )
+
+    has_today_event = False
+    if(geo and geo != "ALL"):
+        has_today_event = qs_today.exclude(severity="NONE").exists();
+    
 
     # 단일 geo일 때만 labels/values가 의미 있음 (ALL이면 차트는 API로)
     labels: list[str] = []
@@ -166,6 +184,7 @@ def term_detail(request, term: str):
         "values": values,
         "events": events,  #   차트 점용 (DB severity)
         # Events 테이블은 htmx partial로 따로 로딩됨
+        "has_today_event": has_today_event,
     })
 
 def discovery_inbox(request):
@@ -322,26 +341,53 @@ def events_table(request):
 
 
 @require_GET
-def api_term_ai(request):
+def api_term_has_today_event(request):
     term = (request.GET.get("term") or "").strip()
     geo = (request.GET.get("geo") or "ALL").strip().upper()
-    print(term, geo)
-    metrics = _get_latest_metrics(term=term, geo=geo)
+
     if not term:
         return JsonResponse({"error": "term is required"}, status=400)
 
-    try:
-        raw = analyze_term(term, geo, metrics)
-        data = json.loads(raw)
-    except Exception as e:
-        return JsonResponse({"error": str(e)}, status=500)
+    qs = TrendFeature.objects.filter(term=term, as_of_date=date.today())
+    if geo != "ALL":
+        qs = qs.filter(geo=geo)
+
+    # severity 컬럼이 DB에 있다면 이게 정답
+    has_event = qs.exclude(severity="NONE").exists()
 
     return JsonResponse({
         "term": term,
         "geo": geo,
-        "analysis": data,
+        "has_today_event": has_event,
     })
 
+@require_GET
+def api_term_ai(request):
+    term = (request.GET.get("term") or "").strip()
+    geo = (request.GET.get("geo") or "ALL").strip().upper()
+
+    if not term:
+        return JsonResponse({"error": "term is required"}, status=400)
+
+    try:
+        metrics = _get_latest_metrics(term, geo)  # 서버에서 DB 조회
+        analysis = analyze_term(term, geo, metrics)  # Gemini 호출(또는 임시 분석)
+        print(analysis)
+        return JsonResponse({
+            "ok": True,
+            "term": term,
+            "geo": geo,
+            "metrics": metrics,
+            "analysis": analysis,
+        })
+
+    except Exception as e:
+        # 500이어도 이유를 JSON으로 내려줘서 프론트에서 바로 보이게
+        return JsonResponse({
+            "ok": False,
+            "error": str(e),
+            "trace": traceback.format_exc()[:4000],  # 너무 길어지는 거 방지
+        }, status=500)
 
 @require_POST
 def api_term_ai_slack(request):
