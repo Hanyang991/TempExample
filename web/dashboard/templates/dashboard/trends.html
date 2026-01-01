@@ -8,6 +8,7 @@
   severity:
   <select name="severity">
     <option value="" {% if not severity %}selected{% endif %}>ALL</option>
+    <option value="EMERGING" {% if severity == "EMERGING" %}selected{% endif %}>EMERGING</option>
     <option value="WATCH" {% if severity == "WATCH" %}selected{% endif %}>WATCH</option>
     <option value="RISING" {% if severity == "RISING" %}selected{% endif %}>RISING</option>
     <option value="BREAKOUT" {% if severity == "BREAKOUT" %}selected{% endif %}>BREAKOUT</option>

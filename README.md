@@ -49,7 +49,7 @@ daily 실행:
 bash
 코드 복사
 python -m app.main daily
-
+psql -h localhost -p 5434 -U kb -d kbtrends
 python3 -m venv .venv
 docker-compose up -d
 

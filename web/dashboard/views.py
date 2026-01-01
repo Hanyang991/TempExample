@@ -1,3 +1,4 @@
+import json
 from datetime import date, timedelta
 from django.db.models import Count, Max
 from django.http import HttpResponse, HttpResponseBadRequest,JsonResponse
@@ -5,11 +6,14 @@ from django.shortcuts import render
 from django.utils import timezone
 from django.views.decorators.http import require_POST
 from django.views.decorators.http import require_GET
-from .models import TrendFeature, TrendSeries, DiscoveredTerm
-
+from .models import TrendFeature, TrendSeries, DiscoveredTerm, Alert
+from django.views.decorators.csrf import csrf_exempt
+from .gemini_client import analyze_term
 from datetime import date, timedelta
 from django.db.models import Count, Max
 
+import traceback
+ALERT_WINDOW_DAYS = 7
 ALLOWED_SORTS = {
     "date": "as_of_date",
     "z": "z_score",
@@ -17,13 +21,25 @@ ALLOWED_SORTS = {
     "term": "term",
 }
 
+def severity_from_feature(*, z: float, has_alert: bool) -> str:
+    if z >= 2.5:
+        return "BREAKOUT"
+    if z >= 2.0:
+        return "RISING"
+    if z >= 1.0:
+        return "WATCH"
+    if has_alert:
+        return "EMERGING"
+    return "NONE"
+
+
 def trends(request):
     days = int(request.GET.get("days", "14"))
     start = date.today() - timedelta(days=days)
 
-    geo = request.GET.get("geo", "")
-    severity = request.GET.get("severity", "")
-    q = request.GET.get("q", "").strip()
+    geo = (request.GET.get("geo") or "").strip().upper()
+    severity = (request.GET.get("severity") or "").strip().upper()
+    q = (request.GET.get("q") or "").strip()
 
     sort = request.GET.get("sort", "date")
     direction = request.GET.get("dir", "desc")
@@ -32,39 +48,23 @@ def trends(request):
 
     if geo:
         base = base.filter(geo=geo)
+
     if q:
         base = base.filter(term__icontains=q)
 
-    if severity == "WATCH":
-        base = base.filter(z_score__gte=1.0, z_score__lt=2.0)
-    elif severity == "RISING":
-        base = base.filter(z_score__gte=2.0, z_score__lt=2.5)
-    elif severity == "BREAKOUT":
-        base = base.filter(z_score__gte=2.5)
+    #   이제 severity는 DB 컬럼 그대로 필터
+    # severity가 비어있으면 전체
+    if severity:
+        base = base.filter(severity=severity)
 
     sort_col = ALLOWED_SORTS.get(sort, "as_of_date")
     prefix = "" if direction == "asc" else "-"
     order = f"{prefix}{sort_col}"
 
-    rows = (
+    rows = list(
         base.order_by(order)
-            .values("as_of_date", "geo", "term", "z_score", "wow_change")[:300]
+            .values("as_of_date", "geo", "term", "z_score", "wow_change", "severity")[:300]
     )
-
-    def sev(z):
-        if z >= 2.5:
-            return "BREAKOUT"
-        if z >= 2.0:
-            return "RISING"
-        if z >= 1.0:
-            return "WATCH"
-        return "NONE"
-
-    enriched = []
-    for r in rows:
-        r = dict(r)
-        r["severity"] = sev(float(r["z_score"]))
-        enriched.append(r)
 
     ctx = {
         "days": days,
@@ -73,14 +73,13 @@ def trends(request):
         "q": q,
         "sort": sort,
         "dir": direction,
-        "rows": enriched,
+        "rows": rows,  #   이미 severity 포함
     }
 
-
-    # HTMX 요청이면 테이블만 반환
     if request.htmx:
         return render(request, "dashboard/_trends_table.html", ctx)
     return render(request, "dashboard/trends.html", ctx)
+
 
 
 
@@ -92,6 +91,7 @@ def dashboard(request):
 
     # trend_features에는 severity 컬럼이 없으므로 z_score 구간으로 계산
     counts = {
+        # "EMERGING": 
         "WATCH": qs.filter(z_score__gte=1.0, z_score__lt=2.0).count(),
         "RISING": qs.filter(z_score__gte=2.0, z_score__lt=2.5).count(),
         "BREAKOUT": qs.filter(z_score__gte=2.5).count(),
@@ -104,74 +104,88 @@ def dashboard(request):
         .order_by("-max_z", "-cnt", "-last")[:10]
     )
 
+    # emerging_terms = (
+
+    # )
+
     return render(request, "dashboard/dashboard.html", {
         "days": days,
         "counts": counts,
         "top_terms": top_terms,
+        # "emerging_terms": emerging_terms,
     })
 
 def term_detail(request, term: str):
+    # 기본 90일
     start = date.today() - timedelta(days=90)
-
-    # 1) geo 결정: ?geo=US 우선, 없으면 최근 feature에서 하나 기본값
-    geo = (request.GET.get("geo") or "").strip()
-
-    feats_qs = (
-        TrendFeature.objects
-        .filter(term=term, as_of_date__gte=start)
-        .order_by("-as_of_date", "-z_score")
-        .values("as_of_date", "geo", "z_score", "wow_change", "latest", "slope_7d")
-    )
-
-    geo_list_raw = (
-        TrendFeature.objects
-        .filter(term=term, as_of_date__gte=start)
+    today = date.today()
+    # term에 실제 존재하는 geo 목록
+    series_geos = (
+        TrendSeries.objects
+        .filter(term=term, date__gte=start)
         .values_list("geo", flat=True)
         .distinct()
     )
+    geo_list = sorted({g.strip().upper() for g in series_geos if g and g.strip()})
+    
+    #   기본 geo는 ALL
+    geo = (request.GET.get("geo") or "ALL").strip().upper()
+    if geo != "ALL" and geo_list and geo not in geo_list:
+        geo = "ALL"
 
-    # ✅ 공백 제거 + 대문자 통일 + 빈값 제거 + 중복 제거
-    geo_set = {g.strip().upper() for g in geo_list_raw if g and g.strip()}
-    geo_list = sorted(geo_set)
-
-
-    events = []
-    for f in list(feats_qs):
-        events.append({
-            "date": f["as_of_date"].isoformat(),
-            "z": float(f["z_score"]),
-            "wow": float(f["wow_change"]),
-            "severity": "BREAKOUT" if f["z_score"] >= 2.5 else ("RISING" if f["z_score"] >= 2.0 else ("WATCH" if f["z_score"] >= 1.0 else "NONE")),
-        })
-
-    if not geo:
-        first = feats_qs.first()
-        geo = first["geo"] if first else ""   # feature도 없으면 빈 값(차트는 에러 표시)
-
-    # 2) trend_series: geo까지 필터 (차트가 geo별로 정확히 뜸)
-    series_qs = (
-        TrendSeries.objects
-        .filter(term=term, geo=geo, date__gte=start)
-        .order_by("date")
-        .values("date", "value")
+    qs_today = TrendFeature.objects.filter(
+        term=term,
+        as_of_date=today,
     )
 
-    labels = [s["date"].isoformat() for s in series_qs]
-    values = [float(s["value"]) for s in series_qs]
+    has_today_event = False
+    if(geo and geo != "ALL"):
+        has_today_event = qs_today.exclude(severity="NONE").exists();
+    
 
-    # 3) Events: 기본은 해당 geo만 보여주고 싶으면 geo 필터(추천)
-    feats = feats_qs.filter(geo=geo)[:200]
+    # 단일 geo일 때만 labels/values가 의미 있음 (ALL이면 차트는 API로)
+    labels: list[str] = []
+    values: list[float] = []
+
+    if geo != "ALL":
+        series = (
+            TrendSeries.objects
+            .filter(term=term, geo=geo, date__gte=start)
+            .order_by("date")
+            .values("date", "value")
+        )
+        labels = [s["date"].isoformat() for s in series]
+        values = [float(s["value"]) for s in series]
+
+    #   Events 점용 feature rows: DB severity를 그대로 포함해서 가져오기
+    feats_events = list(
+        TrendFeature.objects
+        .filter(term=term, as_of_date__gte=start)
+        .order_by("-as_of_date", "-z_score")
+        .values("as_of_date", "geo", "z_score", "wow_change", "severity")[:500]
+    )
+
+    #   events payload 구성 (severity 재계산 X)
+    events = []
+    for f in feats_events:
+        events.append({
+            "date": f["as_of_date"].isoformat(),
+            "geo": (f["geo"] or "").strip().upper(),
+            "z": float(f["z_score"]),
+            "wow": float(f["wow_change"]),
+            "severity": (f.get("severity") or "NONE").strip().upper(),
+        })
 
     return render(request, "dashboard/term_detail.html", {
         "term": term,
         "geo": geo,
-        "geo_list": geo_list, 
+        "geo_list": geo_list,
         "labels": labels,
         "values": values,
-        "events": events,
-        "features": list(feats),
+        "events": events,  #   차트 점용 (DB severity)
+        # Events 테이블은 htmx partial로 따로 로딩됨
+        "has_today_event": has_today_event,
     })
-
 
 def discovery_inbox(request):
     # new 후보를 term 단위로 묶어서 보여주기
@@ -188,10 +202,32 @@ def discovery_inbox(request):
 
     return render(request, "dashboard/discovery.html", {"rows": rows})
 
+def _get_latest_metrics(term: str, geo: str) -> dict:
+    qs = TrendFeature.objects.filter(term=term)
+
+    if geo != "ALL":
+        qs = qs.filter(geo=geo)
+
+    row = (
+        qs.order_by("-as_of_date")
+          .values("wow_change", "z_score", "slope_7d")
+          .first()
+    )
+
+    if not row:
+        return {}
+
+    return {
+        "wow": float(row["wow_change"]),
+        "z": float(row["z_score"]),
+        "slope": float(row["slope_7d"]),
+    }
+
+
 @require_GET
 def api_term_series(request):
     term = request.GET.get("term", "").strip()
-    geo = request.GET.get("geo", "").strip()
+    geo = (request.GET.get("geo", "") or "").strip().upper()
     days = int(request.GET.get("days", "90"))
 
     if not term or not geo:
@@ -209,18 +245,13 @@ def api_term_series(request):
     x = [r["date"].isoformat() for r in qs]
     y = [float(r["value"]) for r in qs]
 
-    return JsonResponse({
-        "term": term,
-        "geo": geo,
-        "days": days,
-        "x": x,
-        "y": y,
-    })
+    return JsonResponse({"term": term, "geo": geo, "days": days, "x": x, "y": y})
 
 @require_GET
 def api_term_series_all_geo(request):
     term = request.GET.get("term", "").strip()
     days = int(request.GET.get("days", "90"))
+
     if not term:
         return JsonResponse({"error": "term is required"}, status=400)
 
@@ -233,19 +264,20 @@ def api_term_series_all_geo(request):
         .values("geo", "date", "value")
     )
 
-    # geo별로 묶기
     m = {}
     for r in qs:
-        g = r["geo"]
+        g = (r["geo"] or "").strip().upper()
+        if not g:
+            continue
         m.setdefault(g, {"x": [], "y": []})
         m[g]["x"].append(r["date"].isoformat())
         m[g]["y"].append(float(r["value"]))
 
-    traces = []
-    for g, v in m.items():
-        traces.append({"name": g, "x": v["x"], "y": v["y"]})
+    traces = [{"geo": g, "x": v["x"], "y": v["y"]} for g, v in m.items()]
+    traces.sort(key=lambda t: t["geo"])
 
     return JsonResponse({"term": term, "days": days, "traces": traces})
+
 
 @require_POST
 def discovery_approve(request):
@@ -277,3 +309,122 @@ def discovery_reject(request):
     if request.htmx:
         return HttpResponse("")
     return HttpResponse("ok")
+
+
+@require_GET
+def events_table(request):
+    term = request.GET.get("term", "").strip()
+    geo = (request.GET.get("geo") or "ALL").strip().upper()
+    days = int(request.GET.get("days", "90"))
+
+    start = date.today() - timedelta(days=days)
+
+    qs = TrendFeature.objects.filter(term=term, as_of_date__gte=start)
+    if geo != "ALL":
+        qs = qs.filter(geo=geo)
+
+    #   DB severity 포함해서 그대로 가져오기
+    feats = list(
+        qs.order_by("-as_of_date", "-z_score")
+          .values("as_of_date", "geo", "z_score", "wow_change", "severity")[:200]
+    )
+
+    # 템플릿 편의를 위해 정규화만 해줌 (재계산 X)
+    for f in feats:
+        f["geo"] = (f["geo"] or "").strip().upper()
+        f["severity"] = (f.get("severity") or "NONE").strip().upper()
+
+    return render(request, "dashboard/_events_table.html", {
+        "features": feats
+    })
+
+
+
+@require_GET
+def api_term_has_today_event(request):
+    term = (request.GET.get("term") or "").strip()
+    geo = (request.GET.get("geo") or "ALL").strip().upper()
+
+    if not term:
+        return JsonResponse({"error": "term is required"}, status=400)
+
+    qs = TrendFeature.objects.filter(term=term, as_of_date=date.today())
+    if geo != "ALL":
+        qs = qs.filter(geo=geo)
+
+    # severity 컬럼이 DB에 있다면 이게 정답
+    has_event = qs.exclude(severity="NONE").exists()
+
+    return JsonResponse({
+        "term": term,
+        "geo": geo,
+        "has_today_event": has_event,
+    })
+
+@require_GET
+def api_term_ai(request):
+    term = (request.GET.get("term") or "").strip()
+    geo = (request.GET.get("geo") or "ALL").strip().upper()
+
+    if not term:
+        return JsonResponse({"error": "term is required"}, status=400)
+
+    try:
+        metrics = _get_latest_metrics(term, geo)  # 서버에서 DB 조회
+        analysis = analyze_term(term, geo, metrics)  # Gemini 호출(또는 임시 분석)
+        print(analysis)
+        return JsonResponse({
+            "ok": True,
+            "term": term,
+            "geo": geo,
+            "metrics": metrics,
+            "analysis": analysis,
+        })
+
+    except Exception as e:
+        # 500이어도 이유를 JSON으로 내려줘서 프론트에서 바로 보이게
+        return JsonResponse({
+            "ok": False,
+            "error": str(e),
+            "trace": traceback.format_exc()[:4000],  # 너무 길어지는 거 방지
+        }, status=500)
+
+@require_POST
+def api_term_ai_slack(request):
+    try:
+        payload = json.loads(request.body.decode("utf-8"))
+    except Exception:
+        return HttpResponseBadRequest("invalid json")
+
+    term = (payload.get("term") or "").strip()
+    geo = (payload.get("geo") or "ALL").strip().upper()
+    analysis = payload.get("analysis")
+
+    if not term or not analysis:
+        return HttpResponseBadRequest("term and analysis are required")
+
+    # 메시지 구성
+    text = (
+        f"*AI Analysis*\n"
+        f"- term: `{term}`\n"
+        f"- geo: `{geo}`\n"
+        f"- at: {timezone.now().isoformat()}\n\n"
+        f"*Summary*\n{analysis.get('summary','')}\n\n"
+        f"*Angles*\n" + "\n".join([f"- {a}" for a in analysis.get("angles", [])]) + "\n\n"
+        f"*Actions*\n"
+        f"- Content: " + ", ".join(analysis.get("actions", {}).get("content", [])) + "\n"
+        f"- Commerce: " + ", ".join(analysis.get("actions", {}).get("commerce", [])) + "\n"
+    )
+
+    #   여기서 슬랙 전송: 너 app/slack_notifier에 맞춰 연결
+    # 예시 1) webhook 보내는 함수가 있을 때
+    from app.slack_notifier import send_daily_summary  # ❗ 실제 함수명에 맞게 교체
+
+    # send_daily_summary(text) 같은 시그니처가 아니면,
+    # slack_notifier.py의 실제 전송 함수로 바꿔줘.
+    try:
+        send_daily_summary(text)
+    except Exception as e:
+        return JsonResponse({"ok": False, "error": str(e)}, status=500)
+
+    return JsonResponse({"ok": True})

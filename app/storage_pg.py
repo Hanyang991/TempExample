@@ -1,36 +1,85 @@
 from __future__ import annotations
 from datetime import datetime, timedelta
-from typing import Iterable, Tuple
+from typing import Iterable, Tuple, List, Dict, Any, Optional
 from sqlalchemy import text
 from app.db import engine
-from typing import List, Dict, Any, Optional
 import json
 
-def get_top_features(as_of_date: str, limit: int = 5) -> List[Dict[str, Any]]:
-    """
-    오늘(as_of_date) 기준 z_score 내림차순 TOP N 가져오기
-    """
-    q = text("""
-        SELECT term, geo, wow_change, z_score, slope_7d, latest
-        FROM trend_features
-        WHERE as_of_date = :as_of_date
-        ORDER BY z_score DESC
-        LIMIT :limit
-    """)
-    with engine.begin() as conn:
-        rows = conn.execute(q, {"as_of_date": as_of_date, "limit": limit}).fetchall()
 
-    return [
-        {
-            "term": r[0],
-            "geo": r[1],
-            "wow_change": float(r[2]),
-            "z_score": float(r[3]),
-            "slope_7d": float(r[4]),
-            "latest": float(r[5]),
+# ---------------------------
+# FEATURES
+# ---------------------------
+
+def get_top_features(
+    as_of_date: str,
+    limit: int = 5,
+    severities: Optional[List[str]] = None,
+    min_latest: float = 2.0,          # <- 추가
+    prefer_positive_slope: bool = True # <- 추가
+) -> List[Dict[str, Any]]:
+    if severities:
+        q = text("""
+            SELECT term, geo, wow_change, z_score, slope_7d, latest, severity
+            FROM trend_features
+            WHERE as_of_date = :as_of_date
+              AND severity = ANY(:severities)
+              AND latest >= :min_latest
+            ORDER BY
+              CASE
+                WHEN severity='BREAKOUT' THEN 4
+                WHEN severity='RISING' THEN 3
+                WHEN severity='EMERGING' THEN 2
+                ELSE 1
+              END DESC,
+              CASE WHEN :prefer_pos_slope THEN (CASE WHEN slope_7d > 0 THEN 1 ELSE 0 END) ELSE 0 END DESC,
+              latest DESC,
+              z_score DESC
+            LIMIT :limit
+        """)
+        params = {
+            "as_of_date": as_of_date,
+            "severities": severities,
+            "min_latest": min_latest,
+            "prefer_pos_slope": prefer_positive_slope,
+            "limit": limit,
         }
-        for r in rows
-    ]
+    else:
+        q = text("""
+            SELECT term, geo, wow_change, z_score, slope_7d, latest, severity
+            FROM trend_features
+            WHERE as_of_date = :as_of_date
+              AND latest >= :min_latest
+            ORDER BY
+              CASE
+                WHEN severity='BREAKOUT' THEN 4
+                WHEN severity='RISING' THEN 3
+                WHEN severity='EMERGING' THEN 2
+                ELSE 1
+              END DESC,
+              CASE WHEN :prefer_pos_slope THEN (CASE WHEN slope_7d > 0 THEN 1 ELSE 0 END) ELSE 0 END DESC,
+              latest DESC,
+              z_score DESC
+            LIMIT :limit
+        """)
+        params = {
+            "as_of_date": as_of_date,
+            "min_latest": min_latest,
+            "prefer_pos_slope": prefer_positive_slope,
+            "limit": limit,
+        }
+
+    with engine.begin() as conn:
+        rows = conn.execute(q, params).fetchall()
+
+    return [{
+        "term": r[0],
+        "geo": r[1],
+        "wow_change": float(r[2]),
+        "z_score": float(r[3]),
+        "slope_7d": float(r[4]),
+        "latest": float(r[5]),
+        "severity": r[6],
+    } for r in rows]
 
 
 def upsert_trend_series(rows: Iterable[Tuple[str, str, str, float, str]]):
@@ -54,22 +103,56 @@ def upsert_trend_series(rows: Iterable[Tuple[str, str, str, float, str]]):
     with engine.begin() as conn:
         conn.execute(q, payload)
 
-def upsert_feature(term: str, geo: str, as_of_date: str, wow: float, z: float, slope: float, latest: float):
+
+def upsert_feature(
+    term: str,
+    geo: str,
+    as_of_date: str,
+    wow: float,
+    z: float,
+    slope: float,
+    latest: float,
+    severity: str,
+    evidence: Optional[Dict[str, Any]] = None,
+):
+    """
+    trend_features에 severity/evidence까지 저장 (EMERGING 지원)
+    evidence는 jsonb 컬럼(evidence_json)에 저장
+    """
     q = text("""
-        INSERT INTO trend_features(term, geo, as_of_date, wow_change, z_score, slope_7d, latest)
-        VALUES (:term, :geo, :as_of_date, :wow, :z, :slope, :latest)
+        INSERT INTO trend_features(
+            term, geo, as_of_date, wow_change, z_score, slope_7d, latest, severity, evidence_json
+        )
+        VALUES (
+            :term, :geo, :as_of_date, :wow, :z, :slope, :latest, :severity, CAST(:evidence AS jsonb)
+        )
         ON CONFLICT (term, geo, as_of_date)
-        DO UPDATE SET wow_change=EXCLUDED.wow_change,
-                    z_score=EXCLUDED.z_score,
-                    slope_7d=EXCLUDED.slope_7d,
-                    latest=EXCLUDED.latest,
-                    computed_at=NOW();
+        DO UPDATE SET
+            wow_change=EXCLUDED.wow_change,
+            z_score=EXCLUDED.z_score,
+            slope_7d=EXCLUDED.slope_7d,
+            latest=EXCLUDED.latest,
+            severity=EXCLUDED.severity,
+            evidence_json=EXCLUDED.evidence_json,
+            computed_at=NOW();
     """)
     with engine.begin() as conn:
         conn.execute(q, {
-            "term": term, "geo": geo, "as_of_date": as_of_date,
-            "wow": wow, "z": z, "slope": slope, "latest": latest
+            "term": term,
+            "geo": geo,
+            "as_of_date": as_of_date,
+            "wow": wow,
+            "z": z,
+            "slope": slope,
+            "latest": latest,
+            "severity": severity,
+            "evidence": json.dumps(evidence or {}),
         })
+
+
+# ---------------------------
+# ALERTS
+# ---------------------------
 
 def fired_recently(term: str, geo: str, severity: str, cooldown_hours: int = 72) -> bool:
     q = text("""
@@ -84,7 +167,15 @@ def fired_recently(term: str, geo: str, severity: str, cooldown_hours: int = 72)
     last = row[0].replace(tzinfo=None)
     return datetime.utcnow() - last < timedelta(hours=cooldown_hours)
 
-def log_alert(term: str, geo: str, severity: str, slack_channel: str | None = None, slack_ts: str | None = None, cooldown_hours: int = 72):
+
+def log_alert(
+    term: str,
+    geo: str,
+    severity: str,
+    slack_channel: str | None = None,
+    slack_ts: str | None = None,
+    cooldown_hours: int = 72
+):
     q = text("""
         INSERT INTO alerts(term, geo, severity, slack_channel, slack_ts, cooldown_until)
         VALUES (:term, :geo, :severity, :slack_channel, :slack_ts,
@@ -92,10 +183,14 @@ def log_alert(term: str, geo: str, severity: str, slack_channel: str | None = No
     """)
     with engine.begin() as conn:
         conn.execute(q, {
-            "term": term, "geo": geo, "severity": severity,
-            "slack_channel": slack_channel, "slack_ts": slack_ts,
+            "term": term,
+            "geo": geo,
+            "severity": severity,
+            "slack_channel": slack_channel,
+            "slack_ts": slack_ts,
             "cooldown": cooldown_hours
         })
+
 
 def was_rising_last_week(term: str, geo: str, as_of_date: str) -> bool:
     q = text("""
@@ -110,6 +205,10 @@ def was_rising_last_week(term: str, geo: str, as_of_date: str) -> bool:
         row = conn.execute(q, {"term": term, "geo": geo, "as_of_date": as_of_date}).fetchone()
     return row is not None
 
+
+# ---------------------------
+# HOURLY SNAPSHOTS
+# ---------------------------
 
 def upsert_hourly_snapshot(snapshot_at_iso: str, geo_count: int, term_count: int, timeframe: str) -> int:
     """
@@ -134,6 +233,7 @@ def upsert_hourly_snapshot(snapshot_at_iso: str, geo_count: int, term_count: int
         }).scalar_one()
     return int(sid)
 
+
 def insert_hourly_snapshot_features(snapshot_id: int, rows: List[Dict[str, Any]]):
     """
     rows: [{term, geo, wow_change, z_score, slope_7d, latest, severity}, ...]
@@ -157,6 +257,7 @@ def insert_hourly_snapshot_features(snapshot_id: int, rows: List[Dict[str, Any]]
     with engine.begin() as conn:
         conn.execute(q, payload)
 
+
 def get_previous_snapshot_id(snapshot_at_iso: str) -> Optional[int]:
     q = text("""
       SELECT id
@@ -169,13 +270,19 @@ def get_previous_snapshot_id(snapshot_at_iso: str) -> Optional[int]:
         row = conn.execute(q, {"t": snapshot_at_iso}).fetchone()
     return int(row[0]) if row else None
 
+
 def get_snapshot_top_features(snapshot_id: int, limit: int = 10) -> List[Dict[str, Any]]:
     q = text("""
       SELECT term, geo, wow_change, z_score, slope_7d, latest, severity
       FROM hourly_snapshot_features
       WHERE snapshot_id = :sid
       ORDER BY
-        CASE severity WHEN 'BREAKOUT' THEN 3 WHEN 'RISING' THEN 2 ELSE 1 END DESC,
+        CASE
+          WHEN severity='BREAKOUT' THEN 4
+          WHEN severity='RISING' THEN 3
+          WHEN severity='EMERGING' THEN 2
+          ELSE 1
+        END DESC,
         z_score DESC
       LIMIT :limit;
     """)
@@ -191,6 +298,7 @@ def get_snapshot_top_features(snapshot_id: int, limit: int = 10) -> List[Dict[st
         "latest": float(r[5]),
         "severity": r[6],
     } for r in rows]
+
 
 def get_snapshot_feature_map(snapshot_id: int) -> Dict[str, Dict[str, Any]]:
     """
@@ -216,6 +324,11 @@ def get_snapshot_feature_map(snapshot_id: int) -> Dict[str, Dict[str, Any]]:
         }
     return m
 
+
+# ---------------------------
+# DAILY ROLLUPS
+# ---------------------------
+
 def upsert_daily_rollup(report_date: str, payload: Dict[str, Any]):
     q = text("""
       INSERT INTO daily_rollups(report_date, payload_json)
@@ -227,19 +340,25 @@ def upsert_daily_rollup(report_date: str, payload: Dict[str, Any]):
     with engine.begin() as conn:
         conn.execute(q, {"d": report_date, "p": json.dumps(payload)})
 
+
 def get_daily_rollup(report_date: str) -> Optional[Dict[str, Any]]:
     q = text("SELECT payload_json FROM daily_rollups WHERE report_date=:d;")
     with engine.begin() as conn:
         row = conn.execute(q, {"d": report_date}).fetchone()
     return row[0] if row else None
 
-def compute_daily_rollup(report_date: str, tz_offset: str = "+09:00",
-                         min_support: int = 2, limit: int = 10) -> Dict[str, Any]:
+
+def compute_daily_rollup(
+    report_date: str,
+    tz_offset: str = "+09:00",
+    min_support: int = 2,
+    limit: int = 10
+) -> Dict[str, Any]:
     """
     report_date: 'YYYY-MM-DD' (Asia/Seoul 기준)
     tz_offset: '+09:00'
+    EMERGING까지 일간 severity_day로 반영
     """
-    # Seoul 기준 하루 범위를 timestamptz로 계산
     q = text(f"""
     WITH bounds AS (
       SELECT
@@ -262,7 +381,8 @@ def compute_daily_rollup(report_date: str, tz_offset: str = "+09:00",
         PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY slope_7d)  AS median_slope,
         MAX(latest) AS max_latest,
         SUM(CASE WHEN severity='BREAKOUT' THEN 1 ELSE 0 END) AS breakout_hits,
-        SUM(CASE WHEN severity='RISING' THEN 1 ELSE 0 END) AS rising_hits
+        SUM(CASE WHEN severity='RISING' THEN 1 ELSE 0 END)   AS rising_hits,
+        SUM(CASE WHEN severity='EMERGING' THEN 1 ELSE 0 END) AS emerging_hits
       FROM base
       GROUP BY term, geo
     ),
@@ -271,6 +391,7 @@ def compute_daily_rollup(report_date: str, tz_offset: str = "+09:00",
         CASE
           WHEN breakout_hits >= 1 THEN 'BREAKOUT'
           WHEN rising_hits >= 2 THEN 'RISING'
+          WHEN emerging_hits >= 2 THEN 'EMERGING'
           ELSE 'WATCH'
         END AS severity_day
       FROM agg
@@ -279,7 +400,12 @@ def compute_daily_rollup(report_date: str, tz_offset: str = "+09:00",
     SELECT term, geo, support, max_z, median_wow, median_slope, max_latest, severity_day
     FROM ranked
     ORDER BY
-      CASE severity_day WHEN 'BREAKOUT' THEN 3 WHEN 'RISING' THEN 2 ELSE 1 END DESC,
+      CASE
+        WHEN severity_day='BREAKOUT' THEN 4
+        WHEN severity_day='RISING' THEN 3
+        WHEN severity_day='EMERGING' THEN 2
+        ELSE 1
+      END DESC,
       max_z DESC
     LIMIT :limit;
     """)
@@ -305,6 +431,11 @@ def compute_daily_rollup(report_date: str, tz_offset: str = "+09:00",
         "min_support": min_support,
     }
 
+
+# ---------------------------
+# DISCOVERED TERMS
+# ---------------------------
+
 def upsert_discovered_terms(rows: List[Dict[str, Any]]):
     """
     rows: [{term, geo, source_term, kind, rank, score, status}, ...]
@@ -325,6 +456,7 @@ def upsert_discovered_terms(rows: List[Dict[str, Any]]):
     """)
     with engine.begin() as conn:
         conn.execute(q, rows)
+
 
 def get_approved_terms(geo: Optional[str] = None, limit: int = 500) -> List[str]:
     """
@@ -352,3 +484,48 @@ def get_approved_terms(geo: Optional[str] = None, limit: int = 500) -> List[str]
     with engine.begin() as conn:
         rows = conn.execute(q, params).fetchall()
     return [r[0] for r in rows]
+
+
+# saved db to slack
+def get_candidates_for_slack(
+    as_of_date: str,
+    severities: List[str],
+    limit: int = 20,
+    min_latest: float = 2.0,
+) -> List[Dict[str, Any]]:
+    """
+    trend_features에서 Slack 발송 후보를 severity/품질 기준으로 가져온다.
+    """
+    q = text("""
+      SELECT term, geo, wow_change, z_score, slope_7d, latest, severity, evidence_json
+      FROM trend_features
+      WHERE as_of_date = :d
+        AND severity = ANY(:sevs)
+        AND latest >= :min_latest
+      ORDER BY
+        CASE
+          WHEN severity='BREAKOUT' THEN 4
+          WHEN severity='RISING' THEN 3
+          WHEN severity='EMERGING' THEN 2
+          ELSE 1
+        END DESC,
+        (CASE WHEN slope_7d > 0 THEN 1 ELSE 0 END) DESC,
+        z_score DESC
+      LIMIT :limit;
+    """)
+    with engine.begin() as conn:
+        rows = conn.execute(q, {"d": as_of_date, "sevs": severities, "min_latest": min_latest, "limit": limit}).fetchall()
+
+    out = []
+    for r in rows:
+        out.append({
+            "term": r[0],
+            "geo": r[1],
+            "wow_change": float(r[2]),
+            "z_score": float(r[3]),
+            "slope_7d": float(r[4]),
+            "latest": float(r[5]),
+            "severity": r[6],
+            "evidence": r[7] or {},   # jsonb
+        })
+    return out

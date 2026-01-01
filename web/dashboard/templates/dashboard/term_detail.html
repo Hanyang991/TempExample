@@ -1,25 +1,40 @@
 {% extends "dashboard/base.html" %}
 {% block content %}
+
 <h2>{{ term }}</h2>
+
 <div style="display:flex; gap:10px; align-items:center; margin: 10px 0 16px;">
   <div>
     <strong>{{ term }}</strong>
+    <button 
+      id = "aiBtn"
+      type="button"
+      onclick="openAI()"
+      {% if not has_today_event %}
+        disabled
+        title="오늘 감지된 트렌드 이벤트가 있을 때만 분석 가능합니다"
+        style="opacity:.4; cursor:not-allowed;"
+      {% endif %}
+    >
+      AI 분석
+    </button>
   </div>
 
   <div style="margin-left:auto; display:flex; gap:8px; align-items:center;">
     <label for="geoSelect">Geo</label>
     <select id="geoSelect" onchange="onGeoChange(this.value)">
+      <option value="ALL" {% if geo == "ALL" %}selected{% endif %}>All geos</option>
       {% for g in geo_list %}
         <option value="{{ g }}" {% if g == geo %}selected{% endif %}>{{ g }}</option>
       {% endfor %}
     </select>
-
-    <button type="button" onclick="toggleAllGeo()">All geos</button>
   </div>
 </div>
-<!-- Plotly CDN: base.html에 넣어도 되고, 여기 넣어도 됨 -->
-<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
 
+<script src="https://cdn.plot.ly/plotly-2.30.0.min.js"></script>
+{{ events|json_script:"events-data" }}
+
+<!-- ================= Trend Chart ================= -->
 <div class="card" style="padding:12px; margin-bottom:12px;">
   <div style="display:flex; gap:8px; align-items:center; margin-bottom:8px;">
     <strong>Trend (Google Trends)</strong>
@@ -30,106 +45,373 @@
     </div>
   </div>
 
-  <!-- ✅ id는 하나만, data-*도 여기 달기 -->
   <div id="seriesChart"
-    data-term="{{ term|escapejs }}"
-    data-geo="{{ geo|default:''|escapejs }}"
-    style="height:360px;">
-  </div>
+       data-term="{{ term|escapejs }}"
+       data-geo="{{ geo|escapejs }}"
+       style="height:360px;"></div>
 </div>
 
 <h3>Events</h3>
-<table>
-  <tr><th>date</th><th>geo</th><th>z</th><th>wow</th><th>severity</th></tr>
-  {% for f in features %}
-  <tr>
-    <td>{{ f.as_of_date }}</td>
-    <td>{{ f.geo }}</td>
-    <td>{{ f.z_score|floatformat:2 }}</td>
-    <td>{{ f.wow_change|floatformat:2 }}</td>
-    <td>
-      {% if f.z_score >= 2.5 %}<span class="pill">BREAKOUT</span>
-      {% elif f.z_score >= 2.0 %}<span class="pill">RISING</span>
-      {% elif f.z_score >= 1.0 %}<span class="pill">WATCH</span>
-      {% else %}<span class="pill">NONE</span>
-      {% endif %}
-    </td>
-  </tr>
-  {% endfor %}
-</table>
+<div id="eventsTable"></div>
+
+<!-- ================= AI Slide Panel ================= -->
+
+<!-- Backdrop -->
+<div id="aiPanelBackdrop"
+     onclick="closeAI()"
+     style="
+       display:none;
+       position:fixed;
+       inset:0;
+       background:rgba(0,0,0,.25);
+       z-index:9998;
+     ">
+</div>
+
+<!-- Slide Panel -->
+<div id="aiPanel"
+     style="
+       display:none; 
+       position:fixed;
+       top:0;
+       right:0;
+       width:360px;
+       height:100%;
+       background:#fff;
+       box-shadow:-2px 0 8px rgba(0,0,0,.15);
+       padding:16px;
+       overflow:auto;
+       z-index:9999;
+     ">
+  <button onclick="closeAI()" style="float:right;">×</button>
+  <h3>AI Analysis</h3>
+  <div id="aiContent">Loading...</div>
+  <hr>
+  <button onclick="sendToSlack()">Slack로 보내기</button>
+</div>
 
 <script>
-  let currentDays = 90;
-  let mode = "single"; // "single" | "all"
+/* ================= Common ================= */
+let currentDays = 90;
+let aiAnalysisCache = null;
 
-  function onGeoChange(newGeo) {
-    const el = document.getElementById("seriesChart");
-    el.dataset.geo = newGeo;
-    mode = "single";
-    render();
-  }
 
-  function toggleAllGeo() {
-    mode = (mode === "all") ? "single" : "all";
-    render();
-  }
+/* helper */
+window.__aiCache = window.__aiCache || new Map();      // key -> data
+window.__aiInFlight = window.__aiInFlight || new Map(); // key -> Promise
+window.__hasTodayEvent = {{ has_today_event|yesno:"true,false" }};
 
-  async function render() {
-    const el = document.getElementById("seriesChart");
-    const term = el.dataset.term;
-    const geo = el.dataset.geo;
-
-    if (mode === "all") {
-      const url = `/api/term-series-all-geo/?term=${encodeURIComponent(term)}&days=${currentDays}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        el.innerHTML = `<div style="padding:12px;color:#b00">API error: ${res.status} ${data.error || ""}</div>`;
-        return;
-      }
-
-      const traces = data.traces.map(t => ({
-        x: t.x, y: t.y, type: "scatter", mode: "lines", name: t.name,
-      }));
-
-      Plotly.newPlot(el, traces, {
-        margin: {t: 20, r: 10, b: 40, l: 50},
-        xaxis: {title: "Date"},
-        yaxis: {title: "Interest"},
-        hovermode: "x unified",
-        legend: {orientation: "h"},
-      }, {responsive: true});
-
-    } else {
-      const url = `/api/term-series/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}&days=${currentDays}`;
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if (!res.ok || data.error) {
-        el.innerHTML = `<div style="padding:12px;color:#b00">API error: ${res.status} ${data.error || ""}</div>`;
-        return;
-      }
-
-      Plotly.newPlot(el, [{
-        x: data.x, y: data.y, type: "scatter", mode: "lines",
-        name: `${data.term} (${data.geo})`,
-      }], {
-        margin: {t: 20, r: 10, b: 40, l: 50},
-        xaxis: {title: "Date"},
-        yaxis: {title: "Interest"},
-        hovermode: "x unified",
-      }, {responsive: true});
-    }
-  }
-
-  function loadSeries(days) {
-    currentDays = days;
-    render();
-  }
-
+document.addEventListener("DOMContentLoaded", () => {
   loadSeries(90);
-</script>
+  refreshEventsTable();
+  updateAiButtonState();
+});
 
+/* ================= Events Table ================= */
+function refreshEventsTable() {
+  const el = document.getElementById("seriesChart");
+  const term = el.dataset.term;
+  const geo = el.dataset.geo;
+
+  const url = `/events-table/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}&days=${currentDays}`;
+  htmx.ajax("GET", url, { target: "#eventsTable", swap: "innerHTML" });
+}
+
+/* ================= Geo / Period ================= */
+
+async function updateAiButtonState() {
+  console.log("onGeoChange");
+  const term = document.getElementById("seriesChart").dataset.term;
+  const geo = document.getElementById("seriesChart").dataset.geo || "ALL";
+
+  const btn = document.getElementById("aiBtn");
+
+  try {
+    const res = await fetch(`/api/term-has-today-event/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}`);
+    const data = await res.json().catch(()=>({}));
+
+    if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+
+    window.__hasTodayEvent = !!data.has_today_event;
+    console.log(window.__hasTodayEvent);
+    if (window.__hasTodayEvent) {
+      btn.disabled = false;
+      btn.style.opacity = "";
+      btn.style.cursor = "";
+      btn.title = "";
+    } else {
+      btn.disabled = true;
+      btn.style.opacity = ".4";
+      btn.style.cursor = "not-allowed";
+      btn.title = "오늘 감지된 이벤트가 있을 때만 분석 가능합니다";
+      // 패널 열려있으면 닫아버리기(선택)
+      closeAI();
+    }
+  } catch (e) {
+    // 실패하면 안전하게 비활성화(쿼터 보호)
+    console.warn("updateAiButtonState failed:", e);
+    btn.disabled = true;
+    btn.style.opacity = ".4";
+    btn.style.cursor = "not-allowed";
+    btn.title = "이벤트 확인 실패로 분석이 잠시 비활성화되었습니다";
+    hint.textContent = "(이벤트 확인 실패)";
+    window.__hasTodayEvent = false;
+  }
+}
+
+function onGeoChange(newGeo) {
+  const el = document.getElementById("seriesChart");
+  el.dataset.geo = newGeo;
+  loadSeries(currentDays);
+  refreshEventsTable();
+  updateAiButtonState();
+  window.__aiAnalysis = null;
+  aiAnalysisCache = null;
+}
+
+function loadSeries(days) {
+  currentDays = days;
+  renderChart();
+  refreshEventsTable();
+}
+
+/* ================= Chart ================= */
+function getEvents() {
+  const el = document.getElementById("events-data");
+  return el ? JSON.parse(el.textContent) : [];
+}
+
+async function renderChart() {
+  const el = document.getElementById("seriesChart");
+  const term = el.dataset.term;
+  const geo = el.dataset.geo;
+
+  if (geo === "ALL") {
+    const res = await fetch(`/api/term-series-all-geo/?term=${encodeURIComponent(term)}&days=${currentDays}`);
+    const data = await res.json();
+
+    const lines = data.traces.map(t => ({
+      x: t.x, y: t.y, type:"scatter", mode:"lines", hoverinfo:"skip"
+    }));
+
+    const events = getEvents().filter(e => e.severity !== "NONE");
+    const seriesMap = new Map();
+    data.traces.forEach(t => {
+      const m = new Map();
+      t.x.forEach((d,i)=>m.set(d,t.y[i]));
+      seriesMap.set(t.geo,m);
+    });
+
+    const dots = [];
+    events.forEach(e => {
+      const m = seriesMap.get(e.geo);
+      if (!m) return;
+      const y = m.get(e.date);
+      if (y === undefined) return;
+      dots.push({
+        x:[e.date], y:[y],
+        type:"scatter", mode:"markers",
+        marker:{size:10},
+        customdata:[e.severity],
+        hovertemplate:"<b>%{x}</b><br>%{customdata}<extra></extra>",
+        showlegend:false
+      });
+    });
+
+    Plotly.newPlot(el, [...lines, ...dots], {
+      hovermode:"x unified", 
+      showlegend: false,
+      yaxis: {
+        rangemode: "tozero" // y축이 반드시 0을 포함하도록 설정
+      }
+    }, {responsive:true});
+    return;
+  }
+
+  const res = await fetch(`/api/term-series/?term=${encodeURIComponent(term)}&geo=${geo}&days=${currentDays}`);
+  const data = await res.json();
+
+  const base = {
+    x:data.x, y:data.y, type:"scatter", mode:"lines", hoverinfo:"skip"
+  };
+
+  const map = new Map(data.x.map((d,i)=>[d,data.y[i]]));
+  const ev = getEvents().filter(e=>e.geo===geo && e.severity!=="NONE");
+
+  const dots = {
+    x:[], y:[], type:"scatter", mode:"markers", marker:{size:10},
+    customdata:[], hovertemplate:"<b>%{x}</b><br>%{customdata}<extra></extra>",
+    showlegend:false
+  };
+
+  ev.forEach(e=>{
+    const y = map.get(e.date);
+    if (y!==undefined) {
+      dots.x.push(e.date);
+      dots.y.push(y);
+      dots.customdata.push(e.severity);
+    }
+  });
+
+  Plotly.newPlot(el, [base, dots], {
+    hovermode: "x unified",
+    showlegend: false,
+    yaxis: {
+      rangemode: "tozero" // y축이 반드시 0을 포함하도록 설정
+    }
+  }, {responsive: true});
+}
+
+/* ================= AI Panel ================= */
+  function escapeHtml(s) {
+    return String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+
+  function renderMetrics(m) {
+    const wow = (m?.wow ?? 0);
+    const z = (m?.z_score ?? m?.z ?? 0);   // z_score / z 둘다 대응
+    const slope = (m?.slope ?? 0);
+
+    return `
+      <div class="ai-metrics">
+        <span>WoW <b>${(Number(wow) * 100).toFixed(1)}%</b></span>
+        <span>Z <b>${Number(z).toFixed(2)}</b></span>
+        <span>Slope <b>${Number(slope).toFixed(2)}</b></span>
+      </div>
+    `;
+  }
+
+  function renderSection(title, text) {
+    return `
+      <div class="ai-section">
+        <h4>${escapeHtml(title)}</h4>
+        <p style="white-space:pre-wrap; line-height:1.6;">${escapeHtml(text)}</p>
+      </div>
+    `;
+  }
+
+  function renderListSection(title, items) {
+    const arr = Array.isArray(items) ? items : [];
+    return `
+      <div class="ai-section">
+        <h4>${escapeHtml(title)}</h4>
+        <ul>
+          ${arr.map(x => `<li>${escapeHtml(x)}</li>`).join("")}
+        </ul>
+      </div>
+    `;
+  }
+
+async function openAI() {
+  if (!window.__hasTodayEvent) {
+    alert("오늘 감지된 이벤트가 있을 때만 AI 분석이 가능합니다.");
+    return;
+  }
+
+  const term = "{{ term|escapejs }}";
+  const geo = document.getElementById("geoSelect")?.value || "ALL";
+  const key = `${term}||${geo}`; // ✅ 캐시 키
+  const enabled = {{ has_today_event|yesno:"true,false" }};
+  if (!enabled) {
+    alert("오늘 감지된 트렌드 이벤트가 있을 때만 AI 분석이 가능합니다.");
+    return;
+  }
+
+  // 패널 열기
+  document.getElementById("aiPanel").style.display = "block";
+  document.getElementById("aiPanelBackdrop").style.display = "block";
+
+  const contentEl = document.getElementById("aiContent");
+  contentEl.innerHTML = "AI 분석 중...";
+
+  try {
+    // ✅ 캐시 있으면 바로 렌더
+    const cached = window.__aiCache.get(key);
+    if (cached) {
+      renderAi(cached);
+      return;
+    }
+
+    // ✅ 동일 요청 중복 방지 (버튼 연타/geo 변경)
+    if (window.__aiInFlight.has(key)) {
+      const data = await window.__aiInFlight.get(key);
+      renderAi(data);
+      return;
+    }
+
+    const p = fetch(`/api/term-ai/?term=${encodeURIComponent(term)}&geo=${encodeURIComponent(geo)}`)
+      .then(async (r) => {
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok) throw new Error(d.error || `HTTP ${r.status}`);
+        return d;
+      })
+      .finally(() => {
+        window.__aiInFlight.delete(key);
+      });
+
+    window.__aiInFlight.set(key, p);
+
+    const data = await p;
+
+    // ✅ 응답 구조 검증 (analysis 없으면 캐시하지 않음)
+    if (!data || !data.analysis || typeof data.analysis !== "object") {
+      throw new Error("Invalid AI response: analysis missing");
+    }
+
+    // ✅ 성공한 것만 캐시
+    window.__aiCache.set(key, data);
+
+    renderAi(data);
+  } catch (err) {
+    console.error("AI 분석 에러:", err);
+    contentEl.innerHTML = `<div style="color:#b00;">AI 분석 실패: ${escapeHtml(err?.message || err)}</div>`;
+  }
+}
+
+// ✅ 렌더 함수: 응답 구조 방어
+function renderAi(d) {
+  const a = d.analysis || {};
+  document.getElementById("aiContent").innerHTML = `
+    ${renderMetrics(d.metrics || {})}
+    ${renderSection("기대 포인트", a.expectation || "")}
+    ${renderSection("왜 중요한가", a.importance || "")}
+    ${renderListSection("추천 액션", Array.isArray(a.actions) ? a.actions : [])}
+  `;
+  // Slack 전송용으로 현재 선택 결과도 저장
+  window.__aiAnalysis = d;
+  aiAnalysisCache = d;
+}
+
+
+function closeAI() {
+  //  다시 완전 비노출
+  document.getElementById("aiPanel").style.display = "none";
+  document.getElementById("aiPanelBackdrop").style.display = "none";
+}
+
+
+function sendToSlack() {
+  if (!aiAnalysisCache) return alert("분석 결과 없음");
+
+  fetch("/api/term-ai-slack/", {
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({
+      term:"{{ term }}",
+      geo:document.getElementById("geoSelect")?.value || "ALL",
+      analysis:aiAnalysisCache
+    })
+  }).then(()=>alert("Slack 전송 완료"));
+}
+
+/* ================= Init ================= */
+loadSeries(90);
+refreshEventsTable();
+</script>
 
 {% endblock %}
