@@ -1,4 +1,4 @@
-# kb-trends-slack-agent (B안)
+# kb-trends-slack-agent
 
 ## Setup
 ```bash
@@ -72,3 +72,4 @@ python3 -m app.demote_seeds --group discovered_auto \
 python3 -m app.demote_seeds --group discovered_auto \
   --use-trend-features --window-days 14 --grace-days 7 \
   --apply --reject
+
